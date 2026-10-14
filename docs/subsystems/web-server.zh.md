@@ -108,6 +108,15 @@ Host `ctx.connection` members consumed by transport-independent adapters.
 createSharedFetchHandler(channel: '/api'): ConnectionFetchHandler
 
 /**
+ * Apply the Host/Origin fence without authenticating.
+ * Product-owned routes outside the shared channel authenticate themselves:
+ * a sign-in endpoint must stay reachable before any credential exists.
+ * @param request - request headers from the HTTP or upgrade request.
+ * @returns 403 when the request fails the fence, otherwise undefined.
+ */
+fence(request: ConnectionTrustRequest): 403 | undefined
+
+/**
  * Apply Connection's Host/Origin checks and browser authentication to
  * another Web route.
  * @param request - request headers from the HTTP or upgrade request.
@@ -117,11 +126,27 @@ requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection
 
 /**
  * Admit one request: it passes {@link requestRejection} and speaks for the
- * operator, or it is refused with that status.
+ * Peer its credential identifies, or it is refused with that status.
  * @param request - request headers from the HTTP or upgrade request.
- * @returns the operator Peer, or the rejection status.
+ * @returns the admitted Peer, or the rejection status.
  */
 admit(request: ConnectionTrustRequest): PeerAdmission
+
+/**
+ * The principal a Peer speaks for.
+ * @param peer - Peer handed to a handler or read from `invocation.peer`.
+ * @returns the principal, or undefined for the operator and unknown Peers.
+ */
+principalOf(peer: PeerScope): ConnectionPrincipal | undefined
+
+/**
+ * Dispose one principal's Peer scope, closing the streams admitted as it.
+ * The credential's own validity stays owned by its authenticator: a revoked
+ * principal is admitted again on its next identified request.
+ * @param principalId - principal key recorded by an authenticator.
+ * @returns settles once the principal's scope has quiesced.
+ */
+revokePrincipal(principalId: string): Promise<void>
 
 /**
  * Authenticate one frontend index request, owning a token redirect or 401.

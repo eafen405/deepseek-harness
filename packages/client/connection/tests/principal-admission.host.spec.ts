@@ -191,4 +191,52 @@ describe('connection second-credential admission', () => {
       await dispose()
     }
   })
+
+  it('revokes one principal scope without disturbing another, and refuses its credential once the authenticator drops it', async () => {
+    const { connection, dispose } = await mounted()
+    try {
+      const live = new Map([['alpha', 'user:1'], ['beta', 'user:2']])
+      const registration = connection.authenticators.register(bearerAuthenticator(live))
+
+      const alpha = connection.admit(fakeRequest({ host: 'localhost', authorization: 'Bearer alpha' }))
+      const beta = connection.admit(fakeRequest({ host: 'localhost', authorization: 'Bearer beta' }))
+      if (!('peer' in alpha) || !('peer' in beta)) throw new Error('both bearers must be admitted')
+
+      let alphaScopeDisposed = false
+      alpha.peer.ctx.effect(() => () => { alphaScopeDisposed = true })
+      let betaScopeDisposed = false
+      beta.peer.ctx.effect(() => () => { betaScopeDisposed = true })
+
+      // Signing out: the authenticator stops identifying the credential, and
+      // the scope that credential's streams were admitted as goes away.
+      live.delete('alpha')
+      await connection.revokePrincipal('user:1')
+      expect(alphaScopeDisposed).toBe(true)
+      expect(betaScopeDisposed).toBe(false)
+      expect(connection.admit(fakeRequest({ host: 'localhost', authorization: 'Bearer alpha' })))
+        .toEqual({ rejection: 401 })
+      const stillBeta = connection.admit(fakeRequest({ host: 'localhost', authorization: 'Bearer beta' }))
+      if (!('peer' in stillBeta)) throw new Error('the surviving principal must stay admitted')
+      expect(stillBeta.peer.id).toBe(beta.peer.id)
+
+      // Removing the authenticator disposes the principals only it vouched for.
+      await registration.dispose()
+      expect(betaScopeDisposed).toBe(true)
+      expect(connection.admit(fakeRequest({ host: 'localhost', authorization: 'Bearer beta' })))
+        .toEqual({ rejection: 401 })
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('rejects a second registration under an existing authenticator name', async () => {
+    const { connection, dispose } = await mounted()
+    try {
+      connection.authenticators.register(bearerAuthenticator(new Map([['alpha', 'user:1']])))
+      expect(() => connection.authenticators.register(bearerAuthenticator(new Map([['beta', 'user:2']]))))
+        .toThrow(/already registered/)
+    } finally {
+      await dispose()
+    }
+  })
 })

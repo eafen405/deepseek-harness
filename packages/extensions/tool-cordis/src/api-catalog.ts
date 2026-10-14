@@ -754,8 +754,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'readonly authenticators: HostConnectionAuthenticators',
+        description: 'Second-credential authenticators; the browser cookie is not one of them.',
+        parameters: [],
+      },
+      {
         signature: 'readonly operator: PeerScope',
-        description: 'The operator Peer every admitted request speaks for; its scope lives as long as Connection.',
+        description: 'The operator Peer the browser cookie speaks for; its scope lives as long as Connection.',
         parameters: [],
       },
       {
@@ -770,6 +775,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Fetch handler for trusted, authenticated requests.',
       },
       {
+        signature: 'fence(request: ConnectionTrustRequest): 403 | undefined',
+        description: 'Apply the Host/Origin fence without authenticating. Product-owned routes outside the shared channel authenticate themselves: a sign-in endpoint must stay reachable before any credential exists.',
+        parameters: [{ name: 'request', description: 'request headers from the HTTP or upgrade request.' }],
+        returns: '403 when the request fails the fence, otherwise undefined.',
+      },
+      {
         signature: 'requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection',
         description: 'Apply Connection\'s Host/Origin checks and browser authentication to another Web route.',
         parameters: [{ name: 'request', description: 'request headers from the HTTP or upgrade request.' }],
@@ -777,9 +788,21 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'admit(request: ConnectionTrustRequest): PeerAdmission',
-        description: 'Admit one request: it passes requestRejection and speaks for the operator, or it is refused with that status.',
+        description: 'Admit one request: it passes requestRejection and speaks for the Peer its credential identifies, or it is refused with that status.',
         parameters: [{ name: 'request', description: 'request headers from the HTTP or upgrade request.' }],
-        returns: 'the operator Peer, or the rejection status.',
+        returns: 'the admitted Peer, or the rejection status.',
+      },
+      {
+        signature: 'principalOf(peer: PeerScope): ConnectionPrincipal | undefined',
+        description: 'The principal a Peer speaks for.',
+        parameters: [{ name: 'peer', description: 'Peer handed to a handler or read from `invocation.peer`.' }],
+        returns: 'the principal, or undefined for the operator and unknown Peers.',
+      },
+      {
+        signature: 'revokePrincipal(principalId: string): Promise<void>',
+        description: 'Dispose one principal\'s Peer scope, closing the streams admitted as it. The credential\'s own validity stays owned by its authenticator: a revoked principal is admitted again on its next identified request.',
+        parameters: [{ name: 'principalId', description: 'principal key recorded by an authenticator.' }],
+        returns: 'settles once the principal\'s scope has quiesced.',
       },
       {
         signature: 'authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean',
@@ -4970,8 +4993,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ConfinedSandboxMode = Exclude<SandboxMode, \'danger-full-access\'>;',
   },
   {
+    name: 'ConnectionAuthenticator',
+    declaration: 'export interface ConnectionAuthenticator {\n    readonly name: string;\n    identify(request: ConnectionTrustRequest): ConnectionPrincipal | undefined;\n}',
+  },
+  {
+    name: 'ConnectionAuthenticatorRegistration',
+    declaration: 'export interface ConnectionAuthenticatorRegistration {\n    dispose(): Promise<void>;\n}',
+  },
+  {
     name: 'ConnectionFetchHandler',
-    declaration: 'export interface ConnectionFetchHandler {\n    requestBodyMode(request: {\n        readonly method: string;\n        readonly url: URL;\n    }): ConnectionRequestBodyMode;\n    fetch(request: Request): Promise<Response>;\n}',
+    declaration: 'export interface ConnectionFetchHandler {\n    requestBodyMode(request: {\n        readonly method: string;\n        readonly url: URL;\n    }): ConnectionRequestBodyMode;\n    fetch(request: Request, peer?: PeerScope): Promise<Response>;\n}',
   },
   {
     name: 'ConnectionFetchMethod',
@@ -4979,7 +5010,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ConnectionFetchRoute',
-    declaration: 'export interface ConnectionFetchRoute {\n    readonly path: string;\n    readonly methods: readonly ConnectionFetchMethod[];\n    readonly requestBody: ConnectionRequestBodyMode;\n    readonly fetch: (request: Request) => Promise<Response>;\n}',
+    declaration: 'export interface ConnectionFetchRoute {\n    readonly path: string;\n    readonly methods: readonly ConnectionFetchMethod[];\n    readonly requestBody: ConnectionRequestBodyMode;\n    readonly fetch: (request: Request, peer?: PeerScope) => Promise<Response>;\n}',
   },
   {
     name: 'ConnectionIndexRequest',
@@ -4988,6 +5019,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ConnectionIndexResponse',
     declaration: 'export interface ConnectionIndexResponse {\n    writeHead(status: number, headers?: Readonly<Record<string, string>>): unknown;\n    end(body?: string): unknown;\n}',
+  },
+  {
+    name: 'ConnectionPrincipal',
+    declaration: 'export interface ConnectionPrincipal {\n    readonly id: string;\n}',
   },
   {
     name: 'ConnectionRequestBodyMode',
@@ -5516,6 +5551,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'HookRegistration',
     declaration: 'export interface HookRegistration {\n    catch(handler: AnyHook): void;\n}',
+  },
+  {
+    name: 'HostConnectionAuthenticators',
+    declaration: 'export interface HostConnectionAuthenticators {\n    register(authenticator: ConnectionAuthenticator): ConnectionAuthenticatorRegistration;\n}',
   },
   {
     name: 'HostConnectionFetch',
