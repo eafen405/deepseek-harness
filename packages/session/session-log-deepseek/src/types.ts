@@ -26,6 +26,7 @@ export type DeepSeekSessionLogWireSurfaceOp =
  * One canonical event translated to raw JSON primitives for upload. Surface
  * events require an operation; system, user, and tool events may cite sources.
  * Assistant provider metadata is embedded in its data; log-only events carry neither field.
+ * Assistant and delivered messages embed their own content and cite no sources.
  */
 export type DeepSeekSessionLogWireEvent = {
   [K in SessionEvent['type']]: {
@@ -36,7 +37,7 @@ export type DeepSeekSessionLogWireEvent = {
     readonly ignorable?: true
   } & (K extends SurfaceEventType ? {
     readonly surfaceOp: DeepSeekSessionLogWireSurfaceOp
-  } & (K extends 'assistant/message' ? {
+  } & (K extends 'assistant/message' | 'delivery/message' ? {
     readonly sourceEventSeqs?: never
   } : {
     readonly sourceEventSeqs?: readonly number[]

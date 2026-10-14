@@ -54,7 +54,9 @@ describe('V4 framing and restoration', () => {
     for (const owner of ['', 7, null]) {
       expect(() => { assertReleasedV4Header({ ...header, owner }) }).toThrow(/owner/)
       expect(() => releasedV4SessionFormatCodec.decodeHeader({ type: 'session', ...header, owner })).toThrow(/owner/)
-      expect(() => releasedV4SessionFormatCodec.encodeHeader({ ...header, owner }, 0)).toThrow(/owner/)
+      // The malformed owner is deliberately outside the logical header type.
+      const malformed = { ...header, owner } as unknown as Parameters<typeof releasedV4SessionFormatCodec.encodeHeader>[0]
+      expect(() => releasedV4SessionFormatCodec.encodeHeader(malformed, 0)).toThrow(/owner/)
     }
     // The unowned legacy header stays ownerless: v4 never invents an owner.
     expect(Object.hasOwn(releasedV4SessionFormatCodec.decodeHeader({ type: 'session', ...header }), 'owner')).toBe(false)

@@ -46,7 +46,10 @@ function projectSessionConversation(snapshot: SessionSurfaceSnapshot): Projected
         if (text !== '') conversation.push({ role: 'user', text, checkpoint, originalText: text, omittedBytes: 0 })
         break
       }
-      case 'assistant/message': {
+      // A delivered message joins the model-visible conversation as an
+      // assistant turn, exactly as it does on the model surface.
+      case 'assistant/message':
+      case 'delivery/message': {
         const text = textContent(event.data.message.content)
         if (text !== '') conversation.push({ role: 'assistant', text, checkpoint: false, originalText: text, omittedBytes: 0 })
         break

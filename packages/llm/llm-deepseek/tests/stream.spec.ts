@@ -55,7 +55,10 @@ describe('Messages stream', () => {
       { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{' } },
       { type: 'content_block_stop', index: 1 }, ...end('max_tokens')]), MODEL))
     expect(result.message.content).toEqual([{ type: 'reasoning', text: '' }])
-    expect(result.message.source.replayState).toMatchObject({ blocks: [{ type: 'reasoning', signature: 'opaque' }] })
+    const source = result.message.source
+    expect(source.kind).toBe('model')
+    expect(source.kind === 'model' ? source.replayState : undefined)
+      .toMatchObject({ blocks: [{ type: 'reasoning', signature: 'opaque' }] })
   })
 
   it.each([

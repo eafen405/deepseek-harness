@@ -908,7 +908,7 @@ Source: [`packages/session/session-title-llm/src/index.ts:57`](../packages/sessi
 }
 ```
 
-Source: [`packages/session/session-log-deepseek/src/types.ts:81`](../packages/session/session-log-deepseek/src/types.ts)
+Source: [`packages/session/session-log-deepseek/src/types.ts:82`](../packages/session/session-log-deepseek/src/types.ts)
 
 ### `step/*`
 
@@ -7771,7 +7771,7 @@ Sources: [`packages/web/web-search-deepseek/src/provider.ts:64`](../packages/web
 
 SHA-256: `8bb8c3751a6ce64b61aba1ec7ae798c00a5803c4d868a0430873216c6569ed52`
 
-Sources: [`packages/session/session-log-deepseek/src/types.ts:81`](../packages/session/session-log-deepseek/src/types.ts)
+Sources: [`packages/session/session-log-deepseek/src/types.ts:82`](../packages/session/session-log-deepseek/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|

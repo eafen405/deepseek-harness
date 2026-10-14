@@ -142,6 +142,10 @@ interface TurnRecord {
 function foldAssistantMessage(turnRecord: TurnRecord, data: { message: AssistantMessage; usage?: TokenUsage }): void {
   turnRecord.answer = textOf(data.message.content)
   if (data.usage === undefined) return
+  // Usage is attributable only to a model this Session actually called. A
+  // delivered message has no provider route, so it contributes its answer text
+  // but no usage record — never a fabricated model name.
+  if (data.message.source.kind !== 'model') return
   const { model } = data.message.source
   const usage = turnRecord.usage ?? { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model }
   usage.input_tokens += data.usage.inputTokens

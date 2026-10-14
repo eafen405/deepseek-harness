@@ -84,12 +84,15 @@ describe('delivery/message', () => {
         'delivery/message at seq 0',
       )
     }).toThrow(/deliveryId/)
+    // Forge a user-role message explicitly so inference cannot widen the payload.
+    const payload = event.data as unknown as Record<string, unknown>
+    const forged: Record<string, unknown> = {
+      ...payload,
+      message: { ...(payload['message'] as Record<string, unknown>), role: 'user' },
+    }
     expect(() => {
       validateSessionEventData(
-        {
-          type: 'delivery/message',
-          data: { ...event.data, message: { ...event.data.message, role: 'user' } } as never,
-        },
+        { type: 'delivery/message', data: forged as never },
         'delivery/message at seq 0',
       )
     }).toThrow(/assistant/)

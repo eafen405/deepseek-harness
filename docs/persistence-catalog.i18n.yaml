@@ -189,8 +189,8 @@
   en: 7b827672c80aecdd
   zh: 7b827672c80aecdd
 /session-persistence-event-catalog/events/session-log-deepseek/session-log-deepseek-delivery-accepted-log-only:
-  en: 4e9ce9182ec05808
-  zh: 7f643a6756ec8f76
+  en: 2ba7ebba4c2e1d13
+  zh: 1ba24e013759dea3
 /session-persistence-event-catalog/events/step:
   en: bd0dcbbc352b771a
   zh: bd0dcbbc352b771a
@@ -1875,8 +1875,8 @@
   en: 04b34b8ffe7e7764
   zh: a792d5371516fd9d
 /session-persistence-event-catalog/resolved-persistence-types/sessionformatversion-sessionid-throughseq:
-  en: 8aaa02b06896492d
-  zh: 4dd0e1ee40d8f22d
+  en: b29935938398bbd0
+  zh: ca21abc158301f5d
 /session-persistence-event-catalog/resolved-persistence-types/shadowedrange-shadowedseqs-shadowedtokencount:
   en: 7a2ab7b62244f43b
   zh: 1084e3f8876feebc

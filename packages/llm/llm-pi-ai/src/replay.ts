@@ -40,6 +40,13 @@ interface PiAiReplayState {
   blocks: PiAiReplayBlock[]
 }
 
+/**
+ * Sentinel route for assistant history this build cannot attribute to a real
+ * provider model: unusable replay state, or a message delivered from another
+ * Session. It deliberately matches no catalog API.
+ */
+const FOREIGN_ROUTE = 'dsh-foreign'
+
 /** Parse tool-call argument JSON; tolerate model malformations with {}. */
 function parseArguments(raw: string): ToolCall['arguments'] {
   try {
@@ -148,9 +155,19 @@ function readReplayState(value: unknown): PiAiReplayState {
   }
 }
 
-/** Convert provider-neutral blocks without trusting them as same-model replay. */
+/**
+ * Convert provider-neutral blocks without trusting them as same-model replay.
+ *
+ * A delivered message was never produced by a model here, so it has no
+ * provider, model, or replay state to attribute. It converts under the same
+ * non-route sentinel as an unusable replay state rather than claiming a
+ * provider model that never produced it.
+ */
 function foreignAssistant(message: HarnessAssistantMessage): AssistantMessage {
   const source = message.source
+  const route = source.kind === 'model'
+    ? { provider: source.provider, model: source.model }
+    : { provider: FOREIGN_ROUTE, model: FOREIGN_ROUTE }
   const content: AssistantMessage['content'] = []
   for (const block of message.content) {
     switch (block.type) {
@@ -174,9 +191,9 @@ function foreignAssistant(message: HarnessAssistantMessage): AssistantMessage {
     content,
     // Deliberately never equals a catalog API: absent replay state is foreign
     // even if source names the same provider/model as this request.
-    api: 'dsh-foreign',
-    provider: source.provider,
-    model: source.model,
+    api: FOREIGN_ROUTE,
+    provider: route.provider,
+    model: route.model,
     usage: emptyPiUsage(),
     stopReason: content.some(piece => piece.type === 'toolCall') ? 'toolUse' : 'stop',
     timestamp: 0,
@@ -246,7 +263,8 @@ function replayedAssistant(message: HarnessAssistantMessage, source: ModelMessag
  */
 export function toPiAssistant(message: HarnessAssistantMessage, onDegrade?: (reason: string) => void): AssistantMessage {
   const source = message.source
-  if (source.replayState === undefined) return foreignAssistant(message)
+  // Only a model-produced message carries durable replay metadata.
+  if (source.kind !== 'model' || source.replayState === undefined) return foreignAssistant(message)
   try {
     return replayedAssistant(message, source, source.replayState)
   } catch (error: unknown) {

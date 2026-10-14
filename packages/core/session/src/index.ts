@@ -323,7 +323,7 @@ function assertAdapterDefaults(
 /** The surface event types whose payload carries an identified message. */
 function isMessageEventType(type: unknown): type is SurfaceEventType {
   return type === 'developer/message' || type === 'system/message' || type === 'user/message'
-    || type === 'assistant/message' || type === 'tool/result'
+    || type === 'assistant/message' || type === 'delivery/message' || type === 'tool/result'
 }
 
 const MESSAGE_ROLE_BY_TYPE: Record<SurfaceEventType, Message['role']> = {
@@ -331,6 +331,7 @@ const MESSAGE_ROLE_BY_TYPE: Record<SurfaceEventType, Message['role']> = {
   'developer/message': 'developer',
   'user/message': 'user',
   'assistant/message': 'assistant',
+  'delivery/message': 'assistant',
   'tool/result': 'tool',
 }
 
