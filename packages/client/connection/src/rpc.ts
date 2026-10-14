@@ -195,8 +195,13 @@ export interface ConnectionFetchRoute {
   readonly methods: readonly ConnectionFetchMethod[]
   /** Buffered requests obey the configured JSON cap; streaming requests arrive with backpressure and no aggregate cap. */
   readonly requestBody: ConnectionRequestBodyMode
-  /** Handle one request after the physical carrier has applied its trust and authentication policy. */
-  readonly fetch: (request: Request) => Promise<Response>
+  /**
+   * Handle one request after the physical carrier has applied its trust and authentication policy.
+   * @param request - Fetch request below the shared channel.
+   * @param peer - Peer the carrier admitted the request as, when the route is
+   * reached through an admitting carrier; absent for direct worker callers.
+   */
+  readonly fetch: (request: Request, peer?: PeerScope) => Promise<Response>
 }
 
 /** Host registry for exact Fetch routes that cannot use JSON Remote invocation. */
@@ -331,9 +336,12 @@ export interface ConnectionFetchHandler {
   /**
    * Dispatch one already-authenticated request.
    * @param request - Fetch request below the shared channel.
+   * @param peer - Peer the carrier admitted this request as. Carriers that
+   * admit per request pass it here; a caller that omits it gets the operator,
+   * which is what direct in-process callers speak for.
    * @returns the registered response or a 404 response.
    */
-  fetch(request: Request): Promise<Response>
+  fetch(request: Request, peer?: PeerScope): Promise<Response>
 }
 
 /** Client caller for logical RPC channels carried by the current transport. */

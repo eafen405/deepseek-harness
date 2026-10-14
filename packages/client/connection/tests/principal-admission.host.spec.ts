@@ -47,6 +47,13 @@ function fakeRequest(headers: Record<string, string>, url = '/api/session.list')
   return request
 }
 
+/** JSON POST carrying a complete client-request envelope. */
+function fakePost(headers: Record<string, string>, url: string, body: unknown): IncomingMessage {
+  const request = Readable.from([Buffer.from(JSON.stringify(body))]) as IncomingMessage
+  Object.assign(request, { url, method: 'POST', headers: { 'content-type': 'application/json', ...headers } })
+  return request
+}
+
 /** Response recorder compatible with the fence's short-circuit and the bridge. */
 function fakeResponse(): {
   response: ServerResponse
@@ -149,6 +156,37 @@ describe('connection second-credential admission', () => {
       }))
       if (!('peer' in browser)) throw new Error('the browser cookie must be admitted')
       expect(browser.peer).toBe(connection.operator)
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('hands the admitted principal Peer to the shared-channel handler', async () => {
+    const { routes, connection, dispose } = await mounted()
+    try {
+      connection.authenticators.register(bearerAuthenticator(new Map([['alpha', 'user:1']])))
+      const identity = { id: 'unset' }
+      connection.rpc.intercept('/api', endpoint => endpoint === 'probe/echo', async (_endpoint, _payload, _signal, peer) => {
+        identity.id = peer.id
+        return { ok: true, value: { principal: connection.principalOf(peer)?.id ?? null } }
+      })
+      const route = routes.find(candidate => candidate.path === '/api')
+      if (route === undefined) throw new Error('the /api route is not mounted')
+
+      const response = fakeResponse()
+      await route.handler(
+        fakePost({ host: 'localhost', authorization: 'Bearer alpha' }, '/api/probe/echo', {
+          type: 'client-request',
+          rpcId: 'probe-1',
+          method: 'probe/echo',
+          payload: {},
+        }),
+        response.response,
+      )
+      const admitted = connection.admit(fakeRequest({ host: 'localhost', authorization: 'Bearer alpha' }))
+      if (!('peer' in admitted)) throw new Error('the bearer request must be admitted')
+      expect(identity.id).toBe(admitted.peer.id)
+      expect(response.state.body).toContain('"principal":"user:1"')
     } finally {
       await dispose()
     }
