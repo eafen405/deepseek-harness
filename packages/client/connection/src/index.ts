@@ -15,11 +15,14 @@ import { ConnectionRecoveryConfigSchema, resolveConnectionConfig, type Connectio
 
 export type {
   PeerAdmission,
+  ConnectionAuthenticator,
+  ConnectionAuthenticatorRegistration,
   ConnectionFetchMethod,
   ConnectionFetchHandler,
   ConnectionFetchRoute,
   ConnectionIndexRequest,
   ConnectionIndexResponse,
+  ConnectionPrincipal,
   ConnectionRpcEndpointMatcher,
   ConnectionRpcAttachment,
   ConnectionRpcFailure,
@@ -30,6 +33,7 @@ export type {
   ConnectionRequestBodyMode,
   ConnectionTrustRequest,
   ClientRequest,
+  HostConnectionAuthenticators,
   HostConnectionHandle,
   HostConnectionFetch,
   HostConnectionRpc,
@@ -39,6 +43,7 @@ export type {
 export type { PeerId, PeerScope, RemoteInvocation } from '@deepseek-ai/dsh-typert-protocol'
 export { RpcId, transportError } from './rpc.ts'
 export { OperatorPeer } from './operator-peer.ts'
+export { PrincipalPeer } from './principal-peer.ts'
 export {
   clientRequestSchema,
   rpcErrorSchema,
@@ -150,7 +155,8 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')
           return
         }
-        await webCtx.waterfall('connection/request', req, res, () => bridge(req, res, fetchHandler, maxRequestBodyBytes))
+        await webCtx.waterfall('connection/request', req, res, () =>
+          bridge(req, res, fetchHandler, maxRequestBodyBytes, admission.peer))
       },
     }
     webCtx.effect(() => webCtx.webServer.register(route), 'client-connection: /api route')

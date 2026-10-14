@@ -115,14 +115,61 @@ export interface ConnectionIndexResponse {
   end(body?: string): unknown
 }
 
-/** Outcome of admitting one request: the operator Peer it speaks for, or the status refusing it. */
+/** Outcome of admitting one request: the Peer it speaks for, or the status refusing it. */
 export type PeerAdmission =
   | { readonly peer: PeerScope }
   | { readonly rejection: 401 | 403 }
 
 /**
+ * Product-level identity one admitted request speaks for. Connection records
+ * only this key: who the principal is and what it may do stay owned by the
+ * module that issued the credential.
+ */
+export interface ConnectionPrincipal {
+  /** Stable, deployment-unique principal key. */
+  readonly id: string
+}
+
+/**
+ * One non-browser credential kind. Connection applies the Host/Origin fence
+ * first, then asks every registered authenticator in registration order; the
+ * first one to identify a principal decides the request's Peer.
+ */
+export interface ConnectionAuthenticator {
+  /** Diagnostic name, unique among one Connection's registrations. */
+  readonly name: string
+  /**
+   * Identify the principal this request speaks for.
+   * @param request - fenced request headers.
+   * @returns the principal, or undefined when this request carries no credential of this kind.
+   */
+  identify(request: ConnectionTrustRequest): ConnectionPrincipal | undefined
+}
+
+/** Registration handle for one second-credential authenticator. */
+export interface ConnectionAuthenticatorRegistration {
+  /**
+   * Remove this authenticator and dispose every principal Peer only it still
+   * vouches for.
+   * @returns settles once the removed authenticator's orphaned scopes have quiesced.
+   */
+  dispose(): Promise<void>
+}
+
+/** Host registry for non-browser credential authenticators. */
+export interface HostConnectionAuthenticators {
+  /**
+   * Register one authenticator.
+   * @param authenticator - named credential kind with synchronous identification.
+   * @returns handle removing it together with its orphaned principal Peers.
+   */
+  register(authenticator: ConnectionAuthenticator): ConnectionAuthenticatorRegistration
+}
+
+/**
  * Handler invoked after Connection has decoded the transport envelope.
- * `peer` is the Peer the request was admitted as: the operator.
+ * `peer` is the Peer the request was admitted as, with the principal recorded
+ * through {@link HostConnectionHandle.principalOf} when it is not the operator.
  */
 export type ConnectionRpcHandler = (
   endpoint: string,
@@ -148,8 +195,13 @@ export interface ConnectionFetchRoute {
   readonly methods: readonly ConnectionFetchMethod[]
   /** Buffered requests obey the configured JSON cap; streaming requests arrive with backpressure and no aggregate cap. */
   readonly requestBody: ConnectionRequestBodyMode
-  /** Handle one request after the physical carrier has applied its trust and authentication policy. */
-  readonly fetch: (request: Request) => Promise<Response>
+  /**
+   * Handle one request after the physical carrier has applied its trust and authentication policy.
+   * @param request - Fetch request below the shared channel.
+   * @param peer - Peer the carrier admitted the request as, when the route is
+   * reached through an admitting carrier; absent for direct worker callers.
+   */
+  readonly fetch: (request: Request, peer?: PeerScope) => Promise<Response>
 }
 
 /** Host registry for exact Fetch routes that cannot use JSON Remote invocation. */
@@ -195,7 +247,9 @@ export interface HostConnectionHandle {
   readonly rpc: HostConnectionRpc
   /** Exact Fetch routes for streaming or browser-native responses. */
   readonly fetch: HostConnectionFetch
-  /** The operator Peer every admitted request speaks for; its scope lives as long as Connection. */
+  /** Second-credential authenticators; the browser cookie is not one of them. */
+  readonly authenticators: HostConnectionAuthenticators
+  /** The operator Peer the browser cookie speaks for; its scope lives as long as Connection. */
   readonly operator: PeerScope
 
   /**
@@ -212,6 +266,15 @@ export interface HostConnectionHandle {
   createSharedFetchHandler(channel: '/api'): ConnectionFetchHandler
 
   /**
+   * Apply the Host/Origin fence without authenticating.
+   * Product-owned routes outside the shared channel authenticate themselves:
+   * a sign-in endpoint must stay reachable before any credential exists.
+   * @param request - request headers from the HTTP or upgrade request.
+   * @returns 403 when the request fails the fence, otherwise undefined.
+   */
+  fence(request: ConnectionTrustRequest): 403 | undefined
+
+  /**
    * Apply Connection's Host/Origin checks and browser authentication to
    * another Web route.
    * @param request - request headers from the HTTP or upgrade request.
@@ -221,11 +284,27 @@ export interface HostConnectionHandle {
 
   /**
    * Admit one request: it passes {@link requestRejection} and speaks for the
-   * operator, or it is refused with that status.
+   * Peer its credential identifies, or it is refused with that status.
    * @param request - request headers from the HTTP or upgrade request.
-   * @returns the operator Peer, or the rejection status.
+   * @returns the admitted Peer, or the rejection status.
    */
   admit(request: ConnectionTrustRequest): PeerAdmission
+
+  /**
+   * The principal a Peer speaks for.
+   * @param peer - Peer handed to a handler or read from `invocation.peer`.
+   * @returns the principal, or undefined for the operator and unknown Peers.
+   */
+  principalOf(peer: PeerScope): ConnectionPrincipal | undefined
+
+  /**
+   * Dispose one principal's Peer scope, closing the streams admitted as it.
+   * The credential's own validity stays owned by its authenticator: a revoked
+   * principal is admitted again on its next identified request.
+   * @param principalId - principal key recorded by an authenticator.
+   * @returns settles once the principal's scope has quiesced.
+   */
+  revokePrincipal(principalId: string): Promise<void>
 
   /**
    * Authenticate one frontend index request, owning a token redirect or 401.
@@ -257,9 +336,12 @@ export interface ConnectionFetchHandler {
   /**
    * Dispatch one already-authenticated request.
    * @param request - Fetch request below the shared channel.
+   * @param peer - Peer the carrier admitted this request as. Carriers that
+   * admit per request pass it here; a caller that omits it gets the operator,
+   * which is what direct in-process callers speak for.
    * @returns the registered response or a 404 response.
    */
-  fetch(request: Request): Promise<Response>
+  fetch(request: Request, peer?: PeerScope): Promise<Response>
 }
 
 /** Client caller for logical RPC channels carried by the current transport. */
