@@ -167,6 +167,22 @@ describe('V4 framing and restoration', () => {
     expect(decoder.finish(output)).toBe(0)
     expect(output.values).toEqual([fact])
   })
+  it('treats a delivery message as required vocabulary rather than a skippable record', () => {
+    const delivery: SessionFormatEvent = {
+      type: 'delivery/message', seq: 0, time: 1,
+      data: {
+        deliveryId: 'delivery-1',
+        origin: { sessionId: 'sender' },
+        message: { id: 'message-1', role: 'assistant', content: [{ type: 'text', text: 'delivered' }] },
+      },
+    }
+    // A reader without this vocabulary must refuse reconstruction, not skip the message.
+    expect(() => restore([delivery])).toThrow('unknown event type')
+    // The same reader may skip a purely informational extension event.
+    const ignorable = { ...delivery, ignorable: true as const }
+    expect(restore([ignorable]).events[0]).toBe(ignorable)
+  })
+
   it('rejects duplicate own catalog membership', () => {
     expect(() => restore([catalog, { ...catalog, seq: 1 }])).toThrow('duplicate catalog child')
   })

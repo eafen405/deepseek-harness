@@ -264,10 +264,12 @@ function finalNode(
       step: state.step,
       blocks: toAssistantBlocks(event.data.message.content),
       usage: event.data.usage,
-      providerMetadata: {
-        provider: event.data.message.source.provider,
-        model: event.data.message.source.model,
-      },
+      providerMetadata: event.data.message.source.kind === 'model'
+        ? {
+          provider: event.data.message.source.provider,
+          model: event.data.message.source.model,
+        }
+        : undefined,
       timing: {
         stepStartTime: state.started ? state.startTime : null,
         firstTokenTime: state.firstTokenTime ?? null,

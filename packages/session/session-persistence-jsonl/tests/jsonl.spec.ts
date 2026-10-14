@@ -1,11 +1,11 @@
-import { MessageId, createMessage } from '@deepseek-ai/dsh-llm'
+import { MessageId, createAssistantMessage, createMessage } from '@deepseek-ai/dsh-llm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { appendFile, mkdtemp, mkdir, rm, readFile, writeFile, readdir, stat, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { scheduler } from 'node:timers/promises'
-import { SESSION_FORMAT_VERSION, SessionLogOffset, SessionOwnerId, SessionSeq, SessionId } from '@deepseek-ai/dsh-session'
+import { DeliveryId, SESSION_FORMAT_VERSION, SessionLogOffset, SessionOwnerId, SessionSeq, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -2585,15 +2585,60 @@ describe('JsonlSessionPersistence: edge cases', () => {
     }
   })
 
-  it('create rejects non-JSON metadata and a fractional creation timestamp without reserving the id', async () => {    await expect(ctx.sessionPersistence.create({ ...meta('bad-meta'), extra: 1n } as unknown as SessionHeader))
-    .rejects.toThrow('session metadata must be losslessly JSON-serializable')
-  await expect(ctx.sessionPersistence.create({ ...meta('fractional-created-at'), createdAt: 1.5 }))
-    .rejects.toThrow('session metadata createdAt must be a non-negative safe integer')
+  it('round-trips a delivered message through the formal persistence interface', async () => {
+    const owner = meta('delivered-message', '/work')
+    const event = {
+      type: 'delivery/message',
+      seq: SessionSeq(0),
+      time: 1,
+      data: {
+        deliveryId: DeliveryId('delivery-1'),
+        origin: { sessionId: SessionId('session-sender'), owner: SessionOwnerId('alice') },
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: 'hello from the sending fairy' }],
+          source: { deliveryId: 'delivery-1', senderSessionId: 'session-sender' },
+        }),
+        attachments: [{ attachmentId: 'attachment-1', name: 'note.txt', bytes: 3 }],
+      },
+      surfaceOp: 'append',
+    } as unknown as SessionEvent
+    await writeLog(ctx.sessionPersistence, owner, [event])
 
-  // The rejected create reserved nothing: the id is free.
-  const valid = meta('fractional-created-at')
-  await writeLog(ctx.sessionPersistence, valid, oneTurnLog())
-  expect((await readAll(ctx.sessionPersistence, valid.id)).meta.createdAt).toBe(valid.createdAt)
+    // A second, independent plugin instance over the same root: a process restart.
+    const restarted = new Context()
+    await restarted.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+    try {
+      const loaded = await readAll(restarted.sessionPersistence, owner.id)
+      expect(loaded.events).toHaveLength(1)
+      expect(loaded.events[0]).toEqual(event)
+      const data = loaded.events[0]?.data as {
+        deliveryId: string
+        origin: { sessionId: string; owner?: string }
+        message: { content: unknown; source: unknown }
+        attachments: unknown
+      }
+      expect(data.deliveryId).toBe('delivery-1')
+      expect(data.origin).toEqual({ sessionId: 'session-sender', owner: 'alice' })
+      expect(data.message.source).toEqual({
+        kind: 'delivered-message', deliveryId: 'delivery-1', senderSessionId: 'session-sender',
+      })
+      expect(data.message.content).toEqual([{ type: 'text', text: 'hello from the sending fairy' }])
+      expect(data.attachments).toEqual([{ attachmentId: 'attachment-1', name: 'note.txt', bytes: 3 }])
+    } finally {
+      await restarted.fiber.dispose()
+    }
+  })
+
+  it('create rejects non-JSON metadata and a fractional creation timestamp without reserving the id', async () => {
+    await expect(ctx.sessionPersistence.create({ ...meta('bad-meta'), extra: 1n } as unknown as SessionHeader))
+      .rejects.toThrow('session metadata must be losslessly JSON-serializable')
+    await expect(ctx.sessionPersistence.create({ ...meta('fractional-created-at'), createdAt: 1.5 }))
+      .rejects.toThrow('session metadata createdAt must be a non-negative safe integer')
+
+    // The rejected create reserved nothing: the id is free.
+    const valid = meta('fractional-created-at')
+    await writeLog(ctx.sessionPersistence, valid, oneTurnLog())
+    expect((await readAll(ctx.sessionPersistence, valid.id)).meta.createdAt).toBe(valid.createdAt)
   })
 
   it('list discovers sessions across multiple project directories', async () => {

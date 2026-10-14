@@ -3,6 +3,8 @@ import type {
   AssistantMessage,
   DeveloperMessage,
   AssistantStreamRecord,
+  FileBlock,
+  ImageBlock,
   ToolCallId,
   LlmCallConfig,
   LlmCallConfigAdapterDefaults,
@@ -42,6 +44,21 @@ export type SessionOwnerId = Branded<'SessionOwnerId'>
  */
 export function SessionOwnerId(owner: string): SessionOwnerId {
   return brandString<SessionOwnerId>(owner)
+}
+
+/**
+ * Stable identity of one delivered message: unchanged across retries, replays,
+ * and restarts, so a recipient resolves a redelivery to the same record.
+ */
+export type DeliveryId = Branded<'DeliveryId'>
+
+/**
+ * Brand a string as a {@link DeliveryId}.
+ * @param id - the raw delivery id string.
+ * @returns the same string with the delivery-id brand.
+ */
+export function DeliveryId(id: string): DeliveryId {
+  return brandString<DeliveryId>(id)
 }
 
 /** Sequence number of one existing event in a Session log. */
@@ -299,6 +316,25 @@ export interface RequestContext {
 export type RequestHeaderReason = 'initial' | 'resume' | 'change' | 'series'
 
 /**
+ * Real origin of one delivered message: the Session that sent it and, when
+ * that Session had one, its durable owner. This is the delivery's actual
+ * source; no model attempt in the receiving Session produced the content, so
+ * no turn, step, or stream identifies it.
+ */
+export interface DeliveryOrigin {
+  /** Session that produced and sent the delivered content. */
+  readonly sessionId: SessionId
+  /** Durable owner of the sending Session, when it had one. */
+  readonly owner?: SessionOwnerId
+}
+
+/**
+ * One stored attachment a delivered message cites, expressed in the existing
+ * content-block attachment vocabulary rather than a parallel attachment system.
+ */
+export type DeliveryAttachmentRef = ImageBlock['attachment'] | FileBlock['attachment']
+
+/**
  * The merge-extensible, append-only source of truth for an agent interaction.
  * Message history is derived from this log. Every event is lossless JSON and
  * sequence numbers stay contiguous. Assistant attempt events embed their exact
@@ -379,6 +415,38 @@ export interface SessionEventMap {
    * reached settlement without fabricating model-visible history.
    */
   'assistant/attempt': { turn: number; step: number; stream: AssistantStreamRecord[] }
+  /**
+   * One message delivered into this Session by another Session, rather than
+   * produced by this Session's own model. It joins the model-visible surface as
+   * an ordinary assistant-role message, so a later user reply continues from it
+   * as normal history.
+   *
+   * It deliberately carries no `turn`, `step`, or `stream`: no model attempt in
+   * this Session produced the content, and inventing those fields would report
+   * a model origin that never existed. The delivery's real source travels in
+   * {@link DeliveryOrigin} instead. Its identity is `deliveryId`, stable across
+   * replays and retries.
+   *
+   * This is a REQUIRED event, never `ignorable`: the content is model-visible
+   * history, so a reader that does not recognize this type must refuse to
+   * reconstruct the Session instead of silently dropping a message the model
+   * would have seen.
+   *
+   * NOT the `session-log-deepseek/delivery-accepted` record: that is an
+   * incremental-upload watermark — `{ sessionId, sessionFormatVersion?,
+   * throughSeq }`, how far a log upload was accepted — and names no message.
+   * This event carries conversation content and has a different shape entirely.
+   */
+  'delivery/message': {
+    /** Stable identity of this delivery, unchanged across replay and retry. */
+    deliveryId: DeliveryId
+    /** Real origin of the delivered content. */
+    origin: DeliveryOrigin
+    /** The delivered content, as an assistant-role message from a non-model source. */
+    message: AssistantMessage
+    /** Attachment references the delivered message cites, in order. */
+    attachments?: readonly DeliveryAttachmentRef[]
+  }
   /**
    * The model requested one tool invocation: `name` with the raw `arguments`
    * JSON string exactly as the model produced it (unparsed). `callId` pairs the
@@ -467,6 +535,7 @@ export type SurfaceEventType =
   | 'developer/message'
   | 'user/message'
   | 'assistant/message'
+  | 'delivery/message'
   | 'tool/result'
 
 /** A message-producing event carrying its required surface operation. */
@@ -495,8 +564,11 @@ export type SurfaceOp =
  */
 export type SurfaceIntent<T extends SurfaceEventType = SurfaceEventType> = {
   surfaceOp: SurfaceOp
-} & (T extends 'assistant/message' ? {
-  /** Assistant messages embed their provider stream instead of citing source events. */
+} & (T extends 'assistant/message' | 'delivery/message' ? {
+  /**
+   * Assistant and delivered messages embed their own content and its origin
+   * instead of citing earlier source events.
+   */
   sourceEventSeqs?: never
 } : {
   /** Complete non-empty set of known earlier source-event seqs. */
