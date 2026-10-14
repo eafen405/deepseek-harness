@@ -70,6 +70,8 @@ function safeSum(values: readonly number[]): number | undefined {
 }
 
 function messageRoute(message: AssistantMessage): TurnTokenUsageRoute | undefined {
+  // A delivered message was not produced by a model route, so it names none.
+  if (message.source.kind !== 'model') return undefined
   const { provider, model } = message.source
   return provider.length > 0 && model.length > 0 ? { provider, model } : undefined
 }

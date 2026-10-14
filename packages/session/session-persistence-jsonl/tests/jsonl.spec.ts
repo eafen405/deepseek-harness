@@ -1,11 +1,11 @@
-import { MessageId, createMessage } from '@deepseek-ai/dsh-llm'
+import { MessageId, createAssistantMessage, createMessage } from '@deepseek-ai/dsh-llm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { appendFile, mkdtemp, mkdir, rm, readFile, writeFile, readdir, stat, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { scheduler } from 'node:timers/promises'
-import { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq, SessionId } from '@deepseek-ai/dsh-session'
+import { DeliveryId, SESSION_FORMAT_VERSION, SessionLogOffset, SessionOwnerId, SessionSeq, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -421,6 +421,7 @@ describe('JsonlSessionPersistence: format helpers', () => {
       origin: 'subagent',
       delegationDepth: 2,
       agentPreset: 'minimal',
+      owner: SessionOwnerId('alice'),
     }
     const events = [
       ...Array.from({ length: 3 }, (_, seq) => ({
@@ -433,6 +434,35 @@ describe('JsonlSessionPersistence: format helpers', () => {
     ))
     expect(scan.meta).toEqual(full)
     expect(scan.inheritedEventCount).toBe(3)
+  })
+
+  it('round-trips the durable session owner through the header line', () => {
+    const owned: SessionHeader = {
+      version: SESSION_FORMAT_VERSION,
+      id: SessionId('owned-header'),
+      createdAt: 5,
+      isSeeded: false,
+      delegationDepth: 0,
+      owner: SessionOwnerId('alice'),
+    }
+    const scan = scanLog(Buffer.from(
+      `${JSON.stringify(toHeaderLine(owned, SessionLogOffset(0)))}\n`,
+    ))
+    expect(scan.meta).toEqual(owned)
+    expect(scan.meta.owner).toBe('alice')
+  })
+
+  it('keeps an unowned header ownerless instead of defaulting it to a user', () => {
+    const legacy: SessionHeader = {
+      version: SESSION_FORMAT_VERSION,
+      id: SessionId('legacy-header'),
+      createdAt: 5,
+      isSeeded: false,
+    }
+    const scan = scanLog(Buffer.from(
+      `${JSON.stringify(toHeaderLine(legacy, SessionLogOffset(0)))}\n`,
+    ))
+    expect(Object.hasOwn(scan.meta, 'owner')).toBe(false)
   })
 
   it.each([
@@ -2532,6 +2562,71 @@ describe('JsonlSessionPersistence: edge cases', () => {
     // The log materialized under the ORIGINAL cwd, not the mutated one.
     expect((await stat(rawLogPath(root, '/orig', SessionId('create-snap')))).isFile()).toBe(true)
     await expect(stat(rawLogPath(root, '/mutated', SessionId('create-snap')))).rejects.toThrow()
+  })
+
+  it('restores the durable session owner through a real persistence reopen', async () => {
+    const owned: SessionHeader = {
+      ...meta('owned-restart', '/work'),
+      delegationDepth: 0,
+      owner: SessionOwnerId('alice'),
+    }
+    await writeLog(ctx.sessionPersistence, owned, oneTurnLog())
+
+    // A second, independent plugin instance over the same root: a process restart.
+    const restarted = new Context()
+    await restarted.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+    try {
+      const loaded = await readAll(restarted.sessionPersistence, owned.id)
+      expect(loaded.meta).toEqual(owned)
+      const listed = await restarted.sessionPersistence.list()
+      expect(listed.find(entry => entry.header.id === owned.id)?.header.owner).toBe('alice')
+    } finally {
+      await restarted.fiber.dispose()
+    }
+  })
+
+  it('round-trips a delivered message through the formal persistence interface', async () => {
+    const owner = meta('delivered-message', '/work')
+    const event = {
+      type: 'delivery/message',
+      seq: SessionSeq(0),
+      time: 1,
+      data: {
+        deliveryId: DeliveryId('delivery-1'),
+        origin: { sessionId: SessionId('session-sender'), owner: SessionOwnerId('alice') },
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: 'hello from the sending fairy' }],
+          source: { deliveryId: 'delivery-1', senderSessionId: 'session-sender' },
+        }),
+        attachments: [{ attachmentId: 'attachment-1', name: 'note.txt', bytes: 3 }],
+      },
+      surfaceOp: 'append',
+    } as unknown as SessionEvent
+    await writeLog(ctx.sessionPersistence, owner, [event])
+
+    // A second, independent plugin instance over the same root: a process restart.
+    const restarted = new Context()
+    await restarted.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+    try {
+      const loaded = await readAll(restarted.sessionPersistence, owner.id)
+      expect(loaded.events).toHaveLength(1)
+      expect(loaded.events[0]).toEqual(event)
+      const data = loaded.events[0]?.data as {
+        deliveryId: string
+        origin: { sessionId: string; owner?: string }
+        message: { content: unknown; source: unknown }
+        attachments: unknown
+      }
+      expect(data.deliveryId).toBe('delivery-1')
+      expect(data.origin).toEqual({ sessionId: 'session-sender', owner: 'alice' })
+      expect(data.message.source).toEqual({
+        kind: 'delivered-message', deliveryId: 'delivery-1', senderSessionId: 'session-sender',
+      })
+      expect(data.message.content).toEqual([{ type: 'text', text: 'hello from the sending fairy' }])
+      expect(data.attachments).toEqual([{ attachmentId: 'attachment-1', name: 'note.txt', bytes: 3 }])
+    } finally {
+      await restarted.fiber.dispose()
+    }
   })
 
   it('create rejects non-JSON metadata and a fractional creation timestamp without reserving the id', async () => {

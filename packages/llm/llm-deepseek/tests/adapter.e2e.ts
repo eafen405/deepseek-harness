@@ -217,7 +217,9 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('DeepSeek Messages real API', () 
     expect(result.assembler.finish).toEqual({ kind: 'stop' })
     expect(result.message.content.filter(block => block.type === 'text').map(block => block.text).join('')).toContain('PONG')
     expect(result.assembler.usage?.outputTokens).toBeGreaterThan(0)
-    expect(result.message.source.replayState).toBeDefined()
+    const source = result.message.source
+    expect(source.kind).toBe('model')
+    expect(source.kind === 'model' ? source.replayState : undefined).toBeDefined()
   })
 
   it('replays a JSON-persisted thinking/tool turn and an error result before continuing', async () => {
@@ -283,6 +285,7 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('DeepSeek Messages real API', () 
     const calls = first.message.content.filter(block => block.type === 'tool-call')
     expect(calls).toHaveLength(1)
     const restored = JSON.parse(JSON.stringify(first.message)) as typeof first.message
+    if (restored.source.kind !== 'model') throw new Error('expected a model-produced assistant message')
     restored.source.replayState = { response: { kind: 'deepseek-messages', version: 2 }, blocks: [] }
     const saved = JSON.stringify(restored)
     history.push(restored, ...calls.map(call => createToolResultMessage({ callId: call.id, content: [{ type: 'text', text: 'REPLAY_RECOVERED_731' }], isError: false })))

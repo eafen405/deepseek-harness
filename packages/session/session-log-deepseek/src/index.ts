@@ -98,6 +98,11 @@ function wireEvent(event: SessionEvent): DeepSeekSessionLogWireEvent {
         ...event.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: event.sourceEventSeqs.map(Number) },
       }
     case 'assistant/message':
+    // A delivered message is model-visible history for this Session, so the
+    // provider must see it in the same position: upload it as a surface event
+    // with its operation. Like assistant/message it embeds its own content and
+    // therefore cites no source events.
+    case 'delivery/message':
       return { ...common, type: event.type, surfaceOp: wireSurfaceOp(event.surfaceOp) }
     default: {
       // Restored unknown ignorable records are opaque, not current surface events.

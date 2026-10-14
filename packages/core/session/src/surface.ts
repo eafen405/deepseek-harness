@@ -52,6 +52,7 @@ const SURFACE_EVENT_TYPES = new Set<string>([
   'developer/message',
   'user/message',
   'assistant/message',
+  'delivery/message',
   'tool/result',
 ])
 
@@ -135,9 +136,12 @@ export function deriveEventMessage(
     // Empty system and developer nodes retain their surface positions without
     // adding wire messages. An empty assistant event hosts a max-tokens step's
     // usage and must not inject a content-less turn into the provider transcript.
+    // A delivered message projects its content the same way, from its real
+    // origin rather than from a model attempt in this Session.
     case 'system/message':
     case 'developer/message':
-    case 'assistant/message': {
+    case 'assistant/message':
+    case 'delivery/message': {
       if (event.data.message.content.length === 0) return null
       return event.data.message
     }
@@ -216,6 +220,56 @@ export function validateSessionEventData(
     if (!isRecord(message) || message['isError'] !== true) {
       throw new Error(`${subject} error requires message.isError === true`)
     }
+  } else if (event.type === 'delivery/message') {
+    validateDeliveryMessageData(data, subject)
+  }
+}
+
+/**
+ * Validate one delivered message's durable payload: a stable delivery identity,
+ * a real origin, and an assistant-role message from the non-model delivery
+ * source that agrees with both. Fabricated `turn`/`step`/`stream` fields are
+ * refused so a delivery can never masquerade as a model attempt.
+ * @param data - candidate delivery payload.
+ * @param subject - event location to include in validation errors.
+ * @throws when the delivery identity, origin, attachments, or message disagree.
+ */
+function validateDeliveryMessageData(data: unknown, subject: string): void {
+  if (!isRecord(data)) throw new Error(`${subject} data must be an object`)
+  for (const key of ['turn', 'step', 'stream']) {
+    if (Object.hasOwn(data, key)) throw new Error(`${subject} must not fabricate a model ${key}`)
+  }
+  const deliveryId = data['deliveryId']
+  if (typeof deliveryId !== 'string' || deliveryId.length === 0) {
+    throw new Error(`${subject} deliveryId must be a nonempty string`)
+  }
+  const origin = data['origin']
+  if (!isRecord(origin)) throw new Error(`${subject} origin must be an object`)
+  const sender = origin['sessionId']
+  if (typeof sender !== 'string' || sender.length === 0) {
+    throw new Error(`${subject} origin.sessionId must be a nonempty string`)
+  }
+  const owner = origin['owner']
+  if (owner !== undefined && (typeof owner !== 'string' || owner.length === 0)) {
+    throw new Error(`${subject} origin.owner must be a nonempty string`)
+  }
+  const attachments = data['attachments']
+  if (attachments !== undefined && (!Array.isArray(attachments) || attachments.length === 0)) {
+    throw new Error(`${subject} attachments must be a nonempty array when present`)
+  }
+  const message = data['message']
+  if (!isRecord(message)) throw new Error(`${subject} message must be an object`)
+  if (message['role'] !== 'assistant') throw new Error(`${subject} message role must be assistant`)
+  const source = message['source']
+  if (!isRecord(source)) throw new Error(`${subject} message source must be an object`)
+  if (source['kind'] !== 'delivered-message') {
+    throw new Error(`${subject} message source kind must be "delivered-message"`)
+  }
+  if (source['deliveryId'] !== deliveryId) {
+    throw new Error(`${subject} message source deliveryId must match its deliveryId`)
+  }
+  if (source['senderSessionId'] !== sender) {
+    throw new Error(`${subject} message source senderSessionId must match origin.sessionId`)
   }
 }
 
@@ -334,6 +388,9 @@ function assertSourceEventReferences(
   const raw: unknown = event.sourceEventSeqs
   if (event.type === 'assistant/message' && raw !== undefined) {
     throw new Error('assistant/message embeds its source stream and cannot carry sourceEventSeqs')
+  }
+  if (event.type === 'delivery/message' && raw !== undefined) {
+    throw new Error('delivery/message embeds its message and cannot carry sourceEventSeqs')
   }
   const sources = new Set<SessionSeq>()
   if (raw !== undefined) {

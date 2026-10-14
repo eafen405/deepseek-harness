@@ -570,7 +570,10 @@ function assertCurrentAssistantStreams(events: readonly SessionEvent[]): void {
     if (!isDeepStrictEqual(event.data.usage, assembler.usage)) {
       throw new Error(`seed assistant/message at index ${index} usage disagrees with its embedded stream`)
     }
-    if (!isDeepStrictEqual(event.data.message.source.replayState, assembler.replayState)) {
+    const seedSource = event.data.message.source
+    // Only a model-produced message carries replay state to reconcile.
+    const seedReplayState = seedSource.kind === 'model' ? seedSource.replayState : undefined
+    if (!isDeepStrictEqual(seedReplayState, assembler.replayState)) {
       throw new Error(`seed assistant/message at index ${index} replay state disagrees with its embedded stream`)
     }
   }

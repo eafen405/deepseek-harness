@@ -14,12 +14,16 @@ import { assertV4ToolResultMessage } from './tool-role.ts'
 
 /**
  * Validate the exact native V4 logical header.
+ *
+ * `owner` is a compatible V4 extension: absent stays absent (an older header is
+ * never assigned an owner here), while a present owner must be a nonempty
+ * string. Requiring ownership is the product/authorization boundary's decision.
  * @param header - decoded or otherwise untrusted V4 Session header candidate.
  */
 export function assertReleasedV4Header(header: unknown): void {
   if (!isSessionFormatJsonObject(header) || header['version'] !== 4) throw new SessionFormatError('expected format v4 header')
   const required = ['version', 'id', 'createdAt', 'isSeeded', 'delegationDepth']
-  const allowed = new Set([...required, 'cwd', 'parentSession', 'origin', 'agentPreset'])
+  const allowed = new Set([...required, 'cwd', 'parentSession', 'origin', 'agentPreset', 'owner'])
   const missing = required.find(key => !Object.hasOwn(header, key))
   const unexpected = Object.keys(header).find(key => !allowed.has(key))
   if (missing !== undefined) throw new SessionFormatError(`format v4 header lacks required field ${missing}`)
@@ -35,6 +39,9 @@ export function assertReleasedV4Header(header: unknown): void {
     if (header[key] !== undefined && typeof header[key] !== 'string') {
       throw new SessionFormatError(`format v4 header ${key} must be a string`)
     }
+  }
+  if (header.owner !== undefined && (typeof header.owner !== 'string' || header.owner.length === 0)) {
+    throw new SessionFormatError('format v4 header owner must be a nonempty string')
   }
   if (header.origin !== undefined && header.origin !== 'subagent') {
     throw new SessionFormatError('format v4 header origin must be "subagent"')

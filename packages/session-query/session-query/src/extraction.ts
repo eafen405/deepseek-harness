@@ -18,6 +18,8 @@ export function extractSessionEventText(event: SessionEvent): string {
       return contentText(event.data.content)
     case 'assistant/message':
       return contentText(event.data.message.content)
+    case 'delivery/message':
+      return contentText(event.data.message.content)
     case 'tool/call':
       return joinText([event.data.name, event.data.arguments])
     case 'tool/result':

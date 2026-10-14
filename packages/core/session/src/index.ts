@@ -131,6 +131,12 @@ function validateSessionHeader(id: SessionId, input: unknown): SessionHeader {
   if (record.agentPreset !== undefined && typeof record.agentPreset !== 'string') {
     throw new Error('session header agentPreset must be a string')
   }
+  // Ownership is optional: a missing owner stays missing (the format layer never
+  // defaults or guesses one), while a present owner must be a nonempty string.
+  // Requiring ownership belongs to the product/authorization boundary, not here.
+  if (record.owner !== undefined && (typeof record.owner !== 'string' || record.owner.length === 0)) {
+    throw new Error('session header owner must be a nonempty string')
+  }
   return deepFreeze(record as unknown as SessionHeader)
 }
 
@@ -317,7 +323,7 @@ function assertAdapterDefaults(
 /** The surface event types whose payload carries an identified message. */
 function isMessageEventType(type: unknown): type is SurfaceEventType {
   return type === 'developer/message' || type === 'system/message' || type === 'user/message'
-    || type === 'assistant/message' || type === 'tool/result'
+    || type === 'assistant/message' || type === 'delivery/message' || type === 'tool/result'
 }
 
 const MESSAGE_ROLE_BY_TYPE: Record<SurfaceEventType, Message['role']> = {
@@ -325,6 +331,7 @@ const MESSAGE_ROLE_BY_TYPE: Record<SurfaceEventType, Message['role']> = {
   'developer/message': 'developer',
   'user/message': 'user',
   'assistant/message': 'assistant',
+  'delivery/message': 'assistant',
   'tool/result': 'tool',
 }
 
@@ -1180,6 +1187,7 @@ export class SessionStore extends Service {
       ...meta?.origin === undefined ? {} : { origin: meta.origin },
       ...meta?.delegationDepth === undefined ? {} : { delegationDepth: meta.delegationDepth },
       ...meta?.agentPreset === undefined ? {} : { agentPreset: meta.agentPreset },
+      ...meta?.owner === undefined ? {} : { owner: meta.owner },
     }
     return Session.create(sessionId, seed, header, options?.inheritedEventCount, this.projections)
   }
@@ -1390,6 +1398,9 @@ export class SessionStore extends Service {
       inheritedEventCount: SessionLogOffset(resolved === undefined ? 0 : resolved + 1),
       meta: {
         ...liveSource.header.cwd !== undefined ? { cwd: liveSource.header.cwd } : {},
+        // A derived Session belongs to the same durable owner as its source:
+        // forking must not produce an ownerless Session.
+        ...liveSource.header.owner !== undefined ? { owner: liveSource.header.owner } : {},
         parentSession: liveSource.id,
         isSeeded: true,
       },

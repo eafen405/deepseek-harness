@@ -1001,7 +1001,8 @@ export class LlmRuntime extends TypertRemoteService {
     const messages: RequestMessage[] = options.messages.map((message) => {
       if (message.role !== 'assistant') return message
       const source = message.source
-      if (source.replayState === undefined) return message
+      // A delivered message has no replay state and belongs to no adapter route.
+      if (source.kind !== 'model' || source.replayState === undefined) return message
       if (this.adapters.get(source.provider)?.adapter === adapter) return message
       return freezeMessage({
         ...message,

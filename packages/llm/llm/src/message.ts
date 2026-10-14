@@ -37,6 +37,27 @@ export interface SystemPromptMessageSource {
 }
 
 /**
+ * Required source of an assistant-role message that was delivered into this
+ * Session from another Session, instead of being produced by a model here. The
+ * content is ordinary conversation history for this Session; it carries no
+ * provider, model, or replay state because no model call in this Session
+ * produced it, and a later user reply continues from it as normal history.
+ *
+ * Deliberately NOT `session-log-deepseek/delivery-accepted`: that record is an
+ * incremental-upload watermark — `{ sessionId, sessionFormatVersion?,
+ * throughSeq }`, how far a log upload was accepted — and names no message. This
+ * kind names the origin of one durable message, so the two concepts, and their
+ * strings, cannot be confused.
+ */
+export interface DeliveredMessageSource {
+  kind: 'delivered-message'
+  /** Stable identity of the delivery that produced this message, preserved across replay. */
+  deliveryId: string
+  /** Session that sent the delivered content. */
+  senderSessionId: string
+}
+
+/**
  * The kind of information in producer-supplied context, declared by the
  * producer in the same `MessageSource`.
  *
@@ -112,6 +133,7 @@ export interface MessageSourceMap {
   model: ModelMessageSource
   tool: ToolMessageSource
   'system-prompt': SystemPromptMessageSource
+  'delivered-message': DeliveredMessageSource
 }
 
 /**
@@ -163,10 +185,10 @@ export interface UserMessage extends MessageBase {
   readonly role: 'user'
 }
 
-/** A model-produced assistant specialization of the shared message representation. */
+/** An assistant-role specialization of the shared message representation: produced by a model here, or delivered from another Session. */
 export interface AssistantMessage extends MessageBase {
   readonly role: 'assistant'
-  readonly source: ModelMessageSource
+  readonly source: ModelMessageSource | DeliveredMessageSource
 }
 
 /** A first-class tool-role message carrying the result of one tool invocation. */
@@ -200,8 +222,14 @@ type NewMessage = {
 }[keyof MessageRoleMap]
 type NewDeveloperMessage = Omit<DeveloperMessage, 'id' | 'role'>
 type NewUserMessage = Omit<UserMessage, 'id' | 'role'>
+/**
+ * Strip the discriminant from each union member so a caller supplies only its
+ * own source fields. Written distributively because `Omit<A | B, 'kind'>`
+ * collapses to the common keys — an empty object for two disjoint sources.
+ */
+type WithoutKind<T> = T extends unknown ? Omit<T, 'kind'> & { readonly kind?: never } : never
 type NewAssistantMessage = Omit<AssistantMessage, 'id' | 'role' | 'source'> & {
-  readonly source: Omit<ModelMessageSource, 'kind'> & { readonly kind?: never }
+  readonly source: WithoutKind<ModelMessageSource | DeliveredMessageSource>
 }
 
 /**
@@ -253,20 +281,23 @@ export function createUserMessage<T extends NewUserMessage>(
 }
 
 /**
- * Create one identified model-produced assistant message and freeze it before publication.
- * @param input - complete content plus the provider, model, and optional replay state for a new assistant message.
- * @returns an immutable assistant message with fixed role/source tags and a fresh stable identity.
+ * Create one identified assistant message and freeze it before publication.
+ * The source kind is selected from the supplied fields: `deliveryId` marks a
+ * message delivered from another Session, otherwise the provider/model fields
+ * mark a message produced by a routed model.
+ * @param input - content plus either the provider/model/replay state or the delivery identity.
+ * @returns an immutable assistant message with fixed role and a fresh stable identity.
  */
 export function createAssistantMessage(
   input: NewAssistantMessage & { readonly id?: never; readonly role?: never },
 ): AssistantMessage {
+  const source = input.source
   return createMessage({
     role: 'assistant',
     content: input.content,
-    source: {
-      kind: 'model',
-      ...input.source,
-    },
+    source: 'deliveryId' in source
+      ? { kind: 'delivered-message' as const, ...source }
+      : { kind: 'model' as const, ...source },
   })
 }
 

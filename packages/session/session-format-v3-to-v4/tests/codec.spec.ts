@@ -43,6 +43,25 @@ describe('V4 framing and restoration', () => {
     expect(() => releasedV4SessionFormatCodec.decodeHeader({ type: 'session', ...header, extra: 1 })).toThrow(/field|member/)
   })
 
+  it('admits the durable session owner on the native v4 header and refuses a malformed one', () => {
+    const owned = { ...header, owner: 'alice' }
+    expect(() => { assertReleasedV4Header(owned) }).not.toThrow()
+    const physical = releasedV4SessionFormatCodec.encodeHeader(owned, 0)
+    expect(physical).toEqual({ type: 'session', ...owned })
+    expect(releasedV4SessionFormatCodec.decodeHeader(physical)).toEqual(owned)
+    expect(releasedV4SessionFormatCodec.createDecoder(physical, 'strict').header).toEqual(owned)
+    expect(restore([fact], owned)).toEqual({ header: owned, events: [fact], inheritedEventCount: 0 })
+    for (const owner of ['', 7, null]) {
+      expect(() => { assertReleasedV4Header({ ...header, owner }) }).toThrow(/owner/)
+      expect(() => releasedV4SessionFormatCodec.decodeHeader({ type: 'session', ...header, owner })).toThrow(/owner/)
+      // The malformed owner is deliberately outside the logical header type.
+      const malformed = { ...header, owner } as unknown as Parameters<typeof releasedV4SessionFormatCodec.encodeHeader>[0]
+      expect(() => releasedV4SessionFormatCodec.encodeHeader(malformed, 0)).toThrow(/owner/)
+    }
+    // The unowned legacy header stays ownerless: v4 never invents an owner.
+    expect(Object.hasOwn(releasedV4SessionFormatCodec.decodeHeader({ type: 'session', ...header }), 'owner')).toBe(false)
+  })
+
   it('rejects malformed optional and required native header fields', () => {
     const { id: _id, ...missingId } = header
     const malformed = [
@@ -150,6 +169,22 @@ describe('V4 framing and restoration', () => {
     expect(decoder.finish(output)).toBe(0)
     expect(output.values).toEqual([fact])
   })
+  it('treats a delivery message as required vocabulary rather than a skippable record', () => {
+    const delivery: SessionFormatEvent = {
+      type: 'delivery/message', seq: 0, time: 1,
+      data: {
+        deliveryId: 'delivery-1',
+        origin: { sessionId: 'sender' },
+        message: { id: 'message-1', role: 'assistant', content: [{ type: 'text', text: 'delivered' }] },
+      },
+    }
+    // A reader without this vocabulary must refuse reconstruction, not skip the message.
+    expect(() => restore([delivery])).toThrow('unknown event type')
+    // The same reader may skip a purely informational extension event.
+    const ignorable = { ...delivery, ignorable: true as const }
+    expect(restore([ignorable]).events[0]).toBe(ignorable)
+  })
+
   it('rejects duplicate own catalog membership', () => {
     expect(() => restore([catalog, { ...catalog, seq: 1 }])).toThrow('duplicate catalog child')
   })

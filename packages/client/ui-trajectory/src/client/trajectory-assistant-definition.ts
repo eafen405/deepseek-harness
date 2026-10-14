@@ -264,10 +264,16 @@ function finalNode(
       step: state.step,
       blocks: toAssistantBlocks(event.data.message.content),
       usage: event.data.usage,
-      providerMetadata: {
-        provider: event.data.message.source.provider,
-        model: event.data.message.source.model,
-      },
+      // A delivered message carries no provider route, so it omits provider
+      // metadata entirely rather than reporting an absent one.
+      ...(event.data.message.source.kind === 'model'
+        ? {
+          providerMetadata: {
+            provider: event.data.message.source.provider,
+            model: event.data.message.source.model,
+          },
+        }
+        : {}),
       timing: {
         stepStartTime: state.started ? state.startTime : null,
         firstTokenTime: state.firstTokenTime ?? null,

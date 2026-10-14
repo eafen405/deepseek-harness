@@ -139,6 +139,17 @@ describe('releasedV2SessionFormatCodec headers', () => {
   ])('refuses a malformed physical header: %s', (_name, header, message) => {
     expect(() => releasedV2SessionFormatCodec.decodeHeader(header)).toThrow(message)
   })
+
+  it('keeps the released v2 header closed to the later session owner field', () => {
+    expect(() => releasedV2SessionFormatCodec.decodeHeader({ ...minimalPhysicalHeader, owner: 'alice' }))
+      .toThrow(/unexpected field owner/)
+    expect(() => releasedV2SessionFormatCodec.encodeHeader(
+      {
+        version: 2, id: 'codec', createdAt: 1, isSeeded: false, delegationDepth: 0, owner: 'alice',
+      } as unknown as Parameters<typeof releasedV2SessionFormatCodec.encodeHeader>[0],
+      0,
+    )).toThrow(/unexpected field owner/)
+  })
 })
 
 describe('releasedV2SessionFormatCodec rows', () => {

@@ -625,7 +625,9 @@ describe('Agent.cancel()', () => {
     await waitForIdle(ctx, agent)
 
     const message = agent.session.snapshotEvents().find(event => event.type === 'assistant/message')
-    expect(message?.type === 'assistant/message' ? message.data.message.source.replayState : undefined)
+    expect(message?.type === 'assistant/message' && message.data.message.source.kind === 'model'
+      ? message.data.message.source.replayState
+      : undefined)
       .toEqual(replayState)
     expect(message?.type === 'assistant/message' ? message.data.interrupted : undefined).toBe(true)
     expect(() => Session.fromRestore(
