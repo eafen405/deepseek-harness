@@ -43,6 +43,23 @@ describe('V4 framing and restoration', () => {
     expect(() => releasedV4SessionFormatCodec.decodeHeader({ type: 'session', ...header, extra: 1 })).toThrow(/field|member/)
   })
 
+  it('admits the durable session owner on the native v4 header and refuses a malformed one', () => {
+    const owned = { ...header, owner: 'alice' }
+    expect(() => { assertReleasedV4Header(owned) }).not.toThrow()
+    const physical = releasedV4SessionFormatCodec.encodeHeader(owned, 0)
+    expect(physical).toEqual({ type: 'session', ...owned })
+    expect(releasedV4SessionFormatCodec.decodeHeader(physical)).toEqual(owned)
+    expect(releasedV4SessionFormatCodec.createDecoder(physical, 'strict').header).toEqual(owned)
+    expect(restore([fact], owned)).toEqual({ header: owned, events: [fact], inheritedEventCount: 0 })
+    for (const owner of ['', 7, null]) {
+      expect(() => { assertReleasedV4Header({ ...header, owner }) }).toThrow(/owner/)
+      expect(() => releasedV4SessionFormatCodec.decodeHeader({ type: 'session', ...header, owner })).toThrow(/owner/)
+      expect(() => releasedV4SessionFormatCodec.encodeHeader({ ...header, owner }, 0)).toThrow(/owner/)
+    }
+    // The unowned legacy header stays ownerless: v4 never invents an owner.
+    expect(Object.hasOwn(releasedV4SessionFormatCodec.decodeHeader({ type: 'session', ...header }), 'owner')).toBe(false)
+  })
+
   it('rejects malformed optional and required native header fields', () => {
     const { id: _id, ...missingId } = header
     const malformed = [

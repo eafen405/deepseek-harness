@@ -28,6 +28,22 @@ export function SessionId(id: string): SessionId {
   return brandString<SessionId>(id)
 }
 
+/**
+ * Identifies the durable owner (one invited Fairy user) a Session belongs to.
+ * A branded string rather than a bare `string`, so a raw user id cannot be
+ * passed where an ownership decision is required.
+ */
+export type SessionOwnerId = Branded<'SessionOwnerId'>
+
+/**
+ * Brand a string as a {@link SessionOwnerId}.
+ * @param owner - the raw owner id string.
+ * @returns the same string with the session-owner brand.
+ */
+export function SessionOwnerId(owner: string): SessionOwnerId {
+  return brandString<SessionOwnerId>(owner)
+}
+
 /** Sequence number of one existing event in a Session log. */
 export type SessionSeq = BrandedNumber<'SessionSeq'>
 
@@ -128,6 +144,14 @@ export interface SessionHeader {
    * would replay history the model can no longer act on.
    */
   readonly agentPreset?: string
+  /**
+   * Durable owner (one invited user) this Session belongs to. Absent for
+   * Sessions written before ownership existed and for harness-internal
+   * Sessions: the format layer never invents, defaults, or guesses an owner.
+   * Requiring an owner — and therefore refusing an ownerless Session — is the
+   * product/authorization boundary's decision, not the storage format's.
+   */
+  readonly owner?: SessionOwnerId
 }
 
 /**
@@ -156,6 +180,8 @@ export interface CreateSessionOptions {
     readonly origin?: 'subagent'
     readonly delegationDepth?: number
     readonly agentPreset?: string
+    /** Durable owner this Session belongs to, when the creator supplies one. */
+    readonly owner?: SessionOwnerId
   }
 }
 

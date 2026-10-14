@@ -23,6 +23,11 @@ export interface SessionFormatHeader extends SessionFormatJsonObject {
   readonly origin?: 'subagent'
   readonly delegationDepth: number
   readonly agentPreset?: string
+  /**
+   * Durable owner id, when the writing generation admits one. Optional so a
+   * header written before ownership existed stays ownerless.
+   */
+  readonly owner?: string
 }
 
 /** One decoded logical Session event. */
