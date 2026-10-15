@@ -112,6 +112,8 @@ export interface Config extends SessionQueryConfig {
   maxLimit?: number
   /** Maximum snippet length in Unicode code points. Defaults to 240. */
   snippetChars?: number
+  /** Match literal substrings, including Chinese, in existing derived documents. Defaults to false (FTS tokens). */
+  literalSubstring?: boolean
   /** Maximum concurrent persisted-log reads in one inherited batch read. Defaults to 4. */
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
@@ -125,6 +127,7 @@ interface ResolvedConfig {
   defaultLimit: number
   maxLimit: number
   snippetChars: number
+  literalSubstring: boolean
   readWindowMax: number
   persistedReadConcurrency: number
   preparedSessionCacheSize: number
@@ -209,6 +212,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     journalMode: z.union(['wal', 'delete', 'truncate', 'persist'] as const).default('wal'),
     defaultLimit: z.number().step(1).min(1).max(SQLITE_MAX_PAGE_LIMIT).default(SESSION_QUERY_SQLITE_DEFAULT_LIMIT),
     maxLimit: z.number().step(1).min(1).max(SQLITE_MAX_PAGE_LIMIT).default(SESSION_QUERY_SQLITE_MAX_LIMIT),
+    literalSubstring: z.boolean().default(false),
     snippetChars: z.number().step(1).min(1).default(SESSION_QUERY_SQLITE_SNIPPET_CHARS),
     readWindowMax: z.number().step(1).min(0).default(SESSION_QUERY_READ_WINDOW_MAX),
     persistedReadConcurrency: z.number()
@@ -359,6 +363,17 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
 
   private async _open(): Promise<void> {
     this._db = await openSearchDatabase(this.config.path, this.config.journalMode)
+    // One literal matcher preserves source casing and supplies the same markers
+    // consumed by the normal ranking/snippet path. No second index is needed.
+    this._db.function('literal_highlight', { deterministic: true }, (text, start, end, query) => {
+      const pattern = String(query).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      let matched = false
+      const marked = String(text).replace(new RegExp(pattern, 'giu'), (value) => {
+        matched = true
+        return `${String(start)}${value}${String(end)}`
+      })
+      return matched ? marked : null
+    })
     const state = this._db.prepare(
       'SELECT global_generation FROM search_state WHERE singleton = 1',
     ).get() as { global_generation: number }
@@ -649,13 +664,13 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     offset: number,
     persistenceBinding: PersistenceBinding,
   ): SearchRow[] {
-    const selected = selectedDocumentsSql()
+    const selected = selectedDocumentsSql(this.config.literalSubstring)
     const sessionWhere = buildSessionWhere(request.sessionFilters)
     const eventWhere = buildEventWhere(request.eventFilters)
     assertFts5OuterPredicateCount(sessionWhere.predicateCount + eventWhere.predicateCount)
     const where = [sessionWhere.sql, eventWhere.sql].filter(Boolean).join(' AND ')
     const bindings = [
-      ...selectedDocumentsParams(request.query, persistenceBinding.service !== undefined),
+      ...selectedDocumentsParams(request.query, persistenceBinding.service !== undefined, this.config.literalSubstring),
       ...sessionWhere.params,
       ...eventWhere.params,
       request.limit + 1,
@@ -686,12 +701,12 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     offset: number,
     persistenceBinding: PersistenceBinding,
   ): SearchRow[] {
-    const selected = selectedDocumentsSql()
+    const selected = selectedDocumentsSql(this.config.literalSubstring)
     const eventWhere = buildEventWhere(request.filters)
     assertFts5OuterPredicateCount(1 + eventWhere.predicateCount)
     const where = ['session_id = ?', eventWhere.sql].filter(Boolean).join(' AND ')
     const bindings = [
-      ...selectedDocumentsParams(request.query, persistenceBinding.service !== undefined),
+      ...selectedDocumentsParams(request.query, persistenceBinding.service !== undefined, this.config.literalSubstring),
       request.sessionId,
       ...eventWhere.params,
       request.limit + 1,
@@ -794,7 +809,7 @@ function headerBindings(
   ]
 }
 
-function selectedDocumentsSql(): { sql: string } {
+function selectedDocumentsSql(literalSubstring: boolean): { sql: string } {
   return {
     sql: `WITH candidates AS (
       SELECT
@@ -812,11 +827,11 @@ function selectedDocumentsSql(): { sql: string } {
         pd.type AS type,
         CAST(pd.time AS INTEGER) AS time,
         pd.surface AS surface,
-        highlight(persisted_docs, 0, ?, ?) AS marked_text,
+        ${literalSubstring ? 'literal_highlight(pd.text, ?, ?, ?)' : 'highlight(persisted_docs, 0, ?, ?)'} AS marked_text,
         CAST(pd.codepoint_length AS INTEGER) AS document_length
       FROM persisted_docs AS pd
       JOIN persisted_sessions AS ps ON ps.id = pd.session_id
-      WHERE persisted_docs MATCH ?
+      WHERE ${literalSubstring ? 'marked_text IS NOT NULL' : 'persisted_docs MATCH ?'}
         AND ? = 1
         AND NOT EXISTS (SELECT 1 FROM temp.live_sessions AS ls WHERE ls.id = pd.session_id)
       UNION ALL
@@ -835,11 +850,11 @@ function selectedDocumentsSql(): { sql: string } {
         ld.type AS type,
         CAST(ld.time AS INTEGER) AS time,
         ld.surface AS surface,
-        highlight(live_docs, 0, ?, ?) AS marked_text,
+        ${literalSubstring ? 'literal_highlight(ld.text, ?, ?, ?)' : 'highlight(live_docs, 0, ?, ?)'} AS marked_text,
         CAST(ld.codepoint_length AS INTEGER) AS document_length
       FROM temp.live_docs AS ld
       JOIN temp.live_sessions AS ls ON ls.id = ld.session_id
-      WHERE live_docs MATCH ?
+      WHERE ${literalSubstring ? 'marked_text IS NOT NULL' : 'live_docs MATCH ?'}
     ), matched AS (
       SELECT *,
         (
@@ -851,8 +866,8 @@ function selectedDocumentsSql(): { sql: string } {
   }
 }
 
-function selectedDocumentsParams(query: string, persistenceVisible: boolean): Array<string | number> {
-  const expression = quoteFtsData(query)
+function selectedDocumentsParams(query: string, persistenceVisible: boolean, literalSubstring: boolean): Array<string | number> {
+  const expression = literalSubstring ? query : quoteFtsData(query)
   const visible = persistenceVisible ? 1 : 0
   return [
     FTS_HIGHLIGHT_START,
@@ -937,6 +952,7 @@ function sameSessionIds(
 
 function sameHeader(a: SessionHeader, b: SessionHeader): boolean {
   return a.id === b.id
+    && a.owner === b.owner
     && a.createdAt === b.createdAt
     && a.cwd === b.cwd
     && a.parentSession === b.parentSession
@@ -1025,6 +1041,7 @@ function resolveConfig(config: Config): ResolvedConfig {
     defaultLimit: config.defaultLimit ?? SESSION_QUERY_SQLITE_DEFAULT_LIMIT,
     maxLimit: config.maxLimit ?? SESSION_QUERY_SQLITE_MAX_LIMIT,
     snippetChars: config.snippetChars ?? SESSION_QUERY_SQLITE_SNIPPET_CHARS,
+    literalSubstring: config.literalSubstring ?? false,
     readWindowMax: config.readWindowMax ?? SESSION_QUERY_READ_WINDOW_MAX,
     persistedReadConcurrency: config.persistedReadConcurrency
       ?? SESSION_QUERY_DEFAULT_PERSISTED_INSPECT_CONCURRENCY,

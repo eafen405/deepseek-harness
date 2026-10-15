@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-使用本包可为会话历史增加带排序的 SQLite FTS5 搜索，既能跨会话搜索，也能在单个会话内搜索，并支持游标分页。它把实时与持久化历史索引到独立的派生数据库，因此搜索反映当前状态，同时不会修改会话持久化存储。精确读取、过滤与追踪仍通过同一查询 API 提供。已发布组合中的搜索是可选能力；配置 `openAt` 可让索引在启动时、首次搜索时打开，或永不打开。结果匹配 token 与短语，而非任意子字符串；每个索引路径只能由一个进程持有。
+使用本包可为会话历史增加带排序的 SQLite FTS5 搜索，既能跨会话搜索，也能在单个会话内搜索，并支持游标分页。它把实时与持久化历史索引到独立的派生数据库，因此搜索反映当前状态，同时不会修改会话持久化存储。精确读取、过滤与追踪仍通过同一查询 API 提供。已发布组合中的搜索是可选能力；配置 `openAt` 可让索引在启动时、首次搜索时打开，或永不打开。结果默认匹配 token 与短语；`literalSubstring` 可启用字面子字符串匹配；每个索引路径只能由一个进程持有。
 
 ## 目录
 
@@ -48,6 +48,7 @@ kind: "package-reference"
 | `defaultLimit` | `20` | 请求省略 `limit` 时的分页大小 |
 | `maxLimit` | `100` | 接受的最大请求分页大小 |
 | `snippetChars` | `240` | 按 Unicode 码点计算的最大 snippet 长度 |
+| `literalSubstring` | `false` | 在现有派生文档中扫描不区分大小写的字面子串，包括中文短词 |
 | `readWindowMax` | `50` | 继承的 `readEvent()` 的 `before`/`after` 原始事件数上限 |
 | `persistedReadConcurrency` | `4` | 继承批量读取的并发持久化日志读取数 |
 | `preparedSessionCacheSize` | `5` | 继承的 `observeSession` 读取器为复用保留的冷 prepared-Session 观察数 |
@@ -60,7 +61,7 @@ kind: "package-reference"
 
 排序是确定性的：实际 FTS5 高亮匹配 span 更多的在前，然后文档更短的在前，事件时间、会话 id 与 seq 打破平局。结果携带按 `snippetChars` 个 Unicode 码点截断的纯文本摘录，没有提供方专用数值分数。分页通过不透明 `SessionSearchCursor` 延续，游标绑定到规范化后的确切请求；相关语料库变化时游标变为陈旧（`SESSION_QUERY_STALE_CURSOR`），会话内游标可在不相关会话变化后延续，跨会话游标则不能。
 
-`unicode61` tokenizer 匹配 token 与短语，而非任意子字符串：`AI` 不匹配 token `BRAID`。需要执行字面、空白灵活的字符串子串扫描时，使用带 `text` 子句的 `ctx.sessionQuery.filterEvents()`。
+`unicode61` tokenizer 匹配 token 与短语，而非任意子字符串：`AI` 不匹配 token `BRAID`。设置 `literalSubstring: true` 可进行带排序的字面子串搜索，包括未分词的中文。它扫描现有派生文档，复用相同的过滤、排序、片段和游标，不增加索引或模式迁移。带 `text` 子句的 `ctx.sessionQuery.filterEvents()` 仍提供不排序的灵活空白扫描。
 
 ### 何时推迟或关闭搜索
 
@@ -142,7 +143,7 @@ kind: "package-reference"
 
 - **无调用方授权**——这是上下文范围内的可信服务；模型工具或 UI 必须强制执行自己的访问策略。
 - **同步查询执行**——`DatabaseSync` 在 MATCH 执行期间会阻塞 JavaScript 线程，且无法中断已运行的语句。
-- **Token 召回，而非任意子字符串**——`unicode61` tokenizer 不会匹配更大 token 中的子字符串；对字面扫描使用 `filterEvents()`。
+- **默认 Token 召回**——`unicode61` tokenizer 不会匹配更大 token 中的子字符串；带排序的子串扫描可启用 `literalSubstring`，不排序的扫描可使用 `filterEvents()`。
 - **单一所有者的派生索引**——每个索引路径必须仅归一个进程中的一个服务所有；不支持外部写入者与多进程共享。
 
 <a id="dev-note"></a>

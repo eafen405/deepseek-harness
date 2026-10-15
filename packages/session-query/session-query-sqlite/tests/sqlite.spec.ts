@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import SessionStore, { SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionLogOffset, SessionOwnerId, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { SessionEvent, SessionHeader, SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
 import SessionPersistence, {
@@ -212,6 +212,28 @@ async function liveContext(config: ConstructorParameters<typeof SqliteSessionQue
 }
 
 describe('SQLite session search', () => {
+  it('finds literal Chinese substrings before ranking and keeps a bounded hit excerpt', async () => {
+    const ctx = await liveContext({ path: ':memory:', literalSubstring: true, snippetChars: 80 })
+    const owned = ctx.sessions.create(SessionId('owned-chinese'), { meta: { owner: SessionOwnerId('user:2') } })
+    owned.append('user/message', createUserMessage({ content: [{ type: 'text', text:
+      '春天的计划已经开始。'.repeat(12) + '我们周末想去北京咖啡馆一起读书。' + '讨论之后再决定出发时间。'.repeat(12),
+    }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    const other = ctx.sessions.create(SessionId('foreign-chinese'), { meta: { owner: SessionOwnerId('user:3') } })
+    other.append('user/message', createUserMessage({ content: [{ type: 'text', text: '咖啡' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    for (const query of ['咖啡馆', '咖啡']) {
+      const result = await ctx.sessionQuery.searchSessions({ query, sessionFilters: [{ kind: 'id', values: [owned.id] }], limit: 1 })
+      expect(result.items).toHaveLength(1)
+      expect(result.items[0]?.header.id).toBe(owned.id)
+      expect(result.items[0]?.bestMatch.seq).toBe(0)
+      expect(result.items[0]?.bestMatch.snippet).toContain('咖啡馆')
+      expect(Array.from(result.items[0]!.bestMatch.snippet)).toHaveLength(80)
+    }
+    owned.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'Meet (A+B)? at 9' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    const punctuation = await ctx.sessionQuery.searchEvents({ sessionId: owned.id, query: '(a+b)?' })
+    expect(punctuation.items).toMatchObject([{ seq: 1, snippet: 'Meet (A+B)? at 9' }])
+    await (ctx.sessionQuery as SqliteSessionQueryEngine).close()
+  })
+
   it('defaults and validates opening policy and persisted inspection concurrency through its Cordis config', async () => {
     const defaultCtx = await liveContext()
     expect((defaultCtx.sessionQuery as SqliteSessionQueryEngine).config.openAt).toBe('startup')
