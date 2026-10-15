@@ -6,12 +6,14 @@
  * 404, missing descendant → errored stream).
  */
 
-import { SESSION_FORMAT_VERSION, SessionSeq } from '@deepseek-ai/dsh-session'
+import { DeliveryId, SESSION_FORMAT_VERSION, SessionOwnerId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { randomBytes } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { unzipSync, strFromU8 } from 'fflate'
 import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import type { FileBlock, ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SessionHeader, SessionId, ToolResultMessage, UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionLineageNode } from '@deepseek-ai/dsh-session-query'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
@@ -101,6 +103,67 @@ function fileEvent(id: string, name = 'notes.txt', bytes = 5, seq = SessionSeq(1
     data: { content: [{ type: 'file', attachment: { attachmentId: id, name, bytes } }] },
   } as unknown as SessionEvent
 }
+
+/** One complete delivery/message event as the product appends it. */
+function deliveryEvent(seq = SessionSeq(1)): SessionEvent<'delivery/message'> {
+  const deliveryId = DeliveryId('delivery-1')
+  const image: ImageBlock = { type: 'image', attachment: storedImage('delivery-image').ref }
+  const file: FileBlock = { type: 'file', attachment: { attachmentId: AttachmentId(`sha256:${'d'.repeat(64)}`), name: 'note.txt', bytes: 3 } }
+  return {
+    type: 'delivery/message', seq, time: 1000, surfaceOp: 'append',
+    data: {
+      deliveryId,
+      origin: { sessionId: sid('session-sender'), owner: SessionOwnerId('user:1') },
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'delivered content' }, image, file],
+        source: { kind: 'delivered-message', deliveryId, senderSessionId: sid('session-sender') },
+      },
+      attachments: [image.attachment, file.attachment],
+    },
+  }
+}
+
+/** One export of `stored`: its archive paths, exported root log text, and attachment read counts. */
+async function deliveryExport(stored: StoredLog): Promise<{
+  readonly paths: string[]
+  readonly rootText: string
+  readonly readImage: ReturnType<typeof vi.fn>
+  readonly readFileStream: ReturnType<typeof vi.fn>
+}> {
+  const readImage = vi.fn((ref: ImageAttachmentRef) => Promise.resolve(storedImage(String(ref.attachmentId), ref.mediaType)))
+  const readFileStream = vi.fn(async function* (_ref: FileAttachmentRef) { yield new Uint8Array([1]) })
+  const api = await buildApi({ 'session-root': stored }, [], { attachments: readImage, readFileStream })
+  const response = await toFetchHandler(api).fetch(new Request('http://host/api/session.export?sessionId=session-root'))
+  const files = unzipSync(await responseBytes(response))
+  return {
+    paths: Object.keys(files).sort(),
+    rootText: new TextDecoder().decode(files[exportLogName] as Uint8Array),
+    readImage,
+    readFileStream,
+  }
+}
+
+describe('delivery/message export', () => {
+  it('bundles delivered file and image attachments once through the established collection path', async () => {
+    const probe = await deliveryExport(log('session-root', undefined, [deliveryEvent()]))
+    expect(probe.paths).toEqual([
+      `files/dd/${'d'.repeat(64)}/note.txt`,
+      'media/delivery-image.png',
+      exportLogName,
+    ].sort())
+    expect(probe.readImage).toHaveBeenCalledTimes(1)
+    expect(probe.readFileStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('exports the delivered event verbatim, preserving its real origin and identity', async () => {
+    const probe = await deliveryExport(log('session-root', undefined, [deliveryEvent()]))
+    const deliveryLine = JSON.parse(probe.rootText.split('\n')[1]!) as SessionEvent
+    expect(deliveryLine).toEqual(deliveryEvent())
+    expect(probe.readImage).toHaveBeenCalledTimes(1)
+    expect(probe.readFileStream).toHaveBeenCalledTimes(1)
+  })
+})
 
 async function buildApi(
   logs: Record<string, StoredLog>,
@@ -249,6 +312,15 @@ describe('serializeSessionLog', () => {
         cwd: '/proj', isSeeded: false, delegationDepth: 0,
       })}\n${JSON.stringify(turnStart)}\n`,
     )
+  })
+
+  it('exports the durable owner on the physical header line and omits it when absent', () => {
+    const owned: SessionHeader = { ...header('session-root'), owner: SessionOwnerId('user:2') }
+    const [ownedHeaderLine] = SessionLogExport.serializeSessionLog(owned, [turnStart]).split('\n')
+    expect(JSON.parse(ownedHeaderLine!)).toMatchObject({ owner: 'user:2' })
+
+    const [ownerlessHeaderLine] = SessionLogExport.serializeSessionLog(header('session-root'), [turnStart]).split('\n')
+    expect(Object.hasOwn(JSON.parse(ownerlessHeaderLine!), 'owner')).toBe(false)
   })
 
   it('serializes v2 lineage through the tagged marker and defaults delegationDepth to 0', () => {

@@ -129,6 +129,7 @@ export function serializeSessionLog(
     ...header.origin !== undefined ? { origin: header.origin } : {},
     delegationDepth: header.delegationDepth ?? 0,
     ...header.agentPreset !== undefined ? { agentPreset: header.agentPreset } : {},
+    ...header.owner !== undefined ? { owner: header.owner } : {},
   })]
   /* jscpd:ignore-end */
   for (const event of events) lines.push(JSON.stringify(event))
@@ -266,6 +267,7 @@ function collectEventAttachmentRefs(
       collectAttachmentRefs(carrier.rawOutput, images, files)
       return
     case 'assistant/message':
+    case 'delivery/message':
       collectAttachmentRefs(carrier.message?.content, images, files)
       break
     case 'assistant/attempt': break
