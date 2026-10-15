@@ -228,6 +228,9 @@ describe('SQLite session search', () => {
       expect(result.items[0]?.bestMatch.snippet).toContain('咖啡馆')
       expect(Array.from(result.items[0]!.bestMatch.snippet)).toHaveLength(80)
     }
+    owned.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'Meet (A+B)? at 9' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    const punctuation = await ctx.sessionQuery.searchEvents({ sessionId: owned.id, query: '(a+b)?' })
+    expect(punctuation.items).toMatchObject([{ seq: 1, snippet: 'Meet (A+B)? at 9' }])
     await (ctx.sessionQuery as SqliteSessionQueryEngine).close()
   })
 
