@@ -11,6 +11,7 @@ import { SessionQueryError } from './config.ts'
 export function assertSessionHeadersCompatible(a: SessionHeader, b: SessionHeader): void {
   if (
     a.id !== b.id
+    || a.owner !== b.owner
     || a.createdAt !== b.createdAt
     || a.cwd !== b.cwd
     || a.parentSession !== b.parentSession

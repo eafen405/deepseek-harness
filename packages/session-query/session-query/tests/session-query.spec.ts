@@ -1175,7 +1175,7 @@ describe('session-query exact reads', () => {
     const sharedEntry = TestPersistence.entries.get(shared.id)!
     sharedEntry.meta = { ...sharedEntry.meta, owner: SessionOwnerId('user:3') }
     await expect(ctx.sessionQuery.listSessions()).rejects.toThrow(expectCode('SESSION_QUERY_SOURCE_CONFLICT'))
-    sharedEntry.meta = { ...sharedEntry.meta, owner: undefined }
+    sharedEntry.meta = { ...shared }
     sharedEntry.meta = { ...sharedEntry.meta, cwd: '/conflict' }
     await expect(ctx.sessionQuery.listSessions()).rejects.toThrow(expectCode('SESSION_QUERY_SOURCE_CONFLICT'))
     sharedEntry.meta = { ...sharedEntry.meta, cwd: '/same', delegationDepth: 1 }
