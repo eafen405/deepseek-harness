@@ -14,6 +14,7 @@ import { unzipSync, strFromU8 } from 'fflate'
 import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { FileBlock, ImageBlock } from '@deepseek-ai/dsh-llm'
+import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SessionHeader, SessionId, ToolResultMessage, UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionLineageNode } from '@deepseek-ai/dsh-session-query'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
@@ -115,6 +116,7 @@ function deliveryEvent(seq = SessionSeq(1)): SessionEvent<'delivery/message'> {
       deliveryId,
       origin: { sessionId: sid('session-sender'), owner: SessionOwnerId('user:1') },
       message: {
+        id: MessageId('delivery-message-1'),
         role: 'assistant',
         content: [{ type: 'text', text: 'delivered content' }, image, file],
         source: { kind: 'delivered-message', deliveryId, senderSessionId: sid('session-sender') },
