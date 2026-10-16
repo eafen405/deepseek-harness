@@ -11,19 +11,19 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { boundContextSummary, createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { ContextFormed } from '@deepseek-ai/dsh-llm'
+import type { ContextFormed, MessageId } from '@deepseek-ai/dsh-llm'
 import { TextRetainer } from '@deepseek-ai/dsh-output-retention'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { GenericCallView, ToolDefinition, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { JobId } from '@deepseek-ai/dsh-jobs'
-import type { JobView, JobRead } from '@deepseek-ai/dsh-jobs'
+import type { JobGeneration, JobView, JobRead } from '@deepseek-ai/dsh-jobs'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent'
 import { publicJob, renderModelDelta, statusLine } from './render.ts'
 import type { PublicJobSnapshot } from './render.ts'
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    'tool-jobs': { kind: 'tool-jobs'; jobId?: JobId; generation?: string } & ContextFormed
+    'tool-jobs': { kind: 'tool-jobs'; jobId?: JobId; generation?: JobGeneration } & ContextFormed
   }
 }
 
@@ -31,7 +31,7 @@ declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /** Minimal retained task state; output bytes remain in the process-local ring. */
     'jobs/lifecycle': {
-      generation: string
+      generation: JobGeneration
       phase: 'registered' | 'stopping' | 'settled' | 'removed'
       job: {
         id: JobId
@@ -46,10 +46,10 @@ declare module '@deepseek-ai/dsh-session/types' {
     }
     /** Actual completion enqueue decision; existing inbox and turn events describe its execution. */
     'jobs/report': {
-      generation: string
+      generation: JobGeneration
       jobId: JobId
       delivery: 'wakeup' | 'busy-context' | 'quiet-context' | 'none' | 'failed'
-      messageId?: string
+      messageId?: MessageId
       reason?: string
     }
   }
@@ -315,7 +315,7 @@ export function apply(ctx: Context, config: Config): void {
     if (event.type !== 'settled') return
     const delivered = killedByModel.delete(event.job.id) || event.awaited
     if (owner === undefined) return
-    const report = (delivery: 'wakeup' | 'busy-context' | 'quiet-context' | 'none' | 'failed', messageId?: string, reason?: string) => {
+    const report = (delivery: 'wakeup' | 'busy-context' | 'quiet-context' | 'none' | 'failed', messageId?: MessageId, reason?: string) => {
       owner.session.append('jobs/report', {
         generation: ctx.jobs.generation, jobId: event.job.id, delivery,
         ...messageId === undefined ? {} : { messageId },

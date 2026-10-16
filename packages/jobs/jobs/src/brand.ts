@@ -1,5 +1,5 @@
 /**
- * dsh-jobs' owned branded id, carried across the registry, the model-facing
+ * dsh-jobs' owned branded ids, carried across the registry, the model-facing
  * control surface, and the client wire.
  *
  * It lives in its own leaf because the package root and `./types` both reach
@@ -25,4 +25,16 @@ export type JobId = Branded<'JobId'>
  */
 export function JobId(id: string): JobId {
   return id as JobId
+}
+
+/** Identifies one process-local job registry generation. */
+export type JobGeneration = Branded<'JobGeneration'>
+
+/**
+ * Brand a registry generation UUID without validation.
+ * @param generation - the registry-issued UUID.
+ * @returns the same string, branded.
+ */
+export function JobGeneration(generation: string): JobGeneration {
+  return generation as JobGeneration
 }

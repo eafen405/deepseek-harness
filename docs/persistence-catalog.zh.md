@@ -685,7 +685,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 ```ts persistence-catalog
 /** Minimal retained task state; output bytes remain in the process-local ring. */
 'jobs/lifecycle': {
-  generation: string
+  generation: JobGeneration
   phase: 'registered' | 'stopping' | 'settled' | 'removed'
   job: {
     id: JobId
@@ -709,10 +709,10 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 ```ts persistence-catalog
 /** Actual completion enqueue decision; existing inbox and turn events describe its execution. */
 'jobs/report': {
-  generation: string
+  generation: JobGeneration
   jobId: JobId
   delivery: 'wakeup' | 'busy-context' | 'quiet-context' | 'none' | 'failed'
-  messageId?: string
+  messageId?: MessageId
   reason?: string
 }
 ```
@@ -5567,6 +5567,8 @@ SHA-256: `5d03ba38734809bcbd2a55221bd938b3b3fc34b49bb686c6113e9e4931e3aa78`
 
 <a id="persistence-type-goalid"></a>
 
+<a id="persistence-type-jobgeneration"></a>
+
 <a id="persistence-type-jobid"></a>
 
 <a id="persistence-type-messagefeedbackversion"></a>
@@ -5604,6 +5606,8 @@ SHA-256: `5d03ba38734809bcbd2a55221bd938b3b3fc34b49bb686c6113e9e4931e3aa78`
 <a id="persistence-type-packagesinteractioncommandssrcbrandtscommandid"></a>
 
 <a id="persistence-type-packagesinteractionuser-approvalsrctypestsapprovalrequestid"></a>
+
+<a id="persistence-type-packagesjobsjobssrcbrandtsjobgeneration"></a>
 
 <a id="persistence-type-packagesjobsjobssrcbrandtsjobid"></a>
 
@@ -5661,7 +5665,7 @@ SHA-256: `5d03ba38734809bcbd2a55221bd938b3b3fc34b49bb686c6113e9e4931e3aa78`
 
 SHA-256: `4cd48f3e5108bd6ebedf7301c3638839b8b2b9db8dbd493974177fbdeb91a01b`
 
-来源：[`packages/api/session-controller/src/types.ts:403`](../packages/api/session-controller/src/types.ts) · [`packages/attachment/attachment/src/brand.ts:6`](../packages/attachment/attachment/src/brand.ts) · [`packages/compaction/compaction/src/brand.ts:4`](../packages/compaction/compaction/src/brand.ts) · [`packages/core/session/src/types.ts:22`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:38`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:53`](../packages/core/session/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:21`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:33`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:9`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/webhook/src/brand.ts:12`](../packages/experimental/webhook/src/brand.ts) · [`packages/experimental/webhook/src/brand.ts:6`](../packages/experimental/webhook/src/brand.ts) · [`packages/experimental/webhook/src/brand.ts:9`](../packages/experimental/webhook/src/brand.ts) · [`packages/feedback/message-feedback/src/types.ts:14`](../packages/feedback/message-feedback/src/types.ts) · [`packages/goal/goal/src/types.ts:17`](../packages/goal/goal/src/types.ts) · [`packages/interaction/commands/src/brand.ts:31`](../packages/interaction/commands/src/brand.ts) · [`packages/interaction/user-approval/src/types.ts:17`](../packages/interaction/user-approval/src/types.ts) · [`packages/jobs/jobs/src/brand.ts:19`](../packages/jobs/jobs/src/brand.ts) · [`packages/llm/llm-retry/src/brand.ts:4`](../packages/llm/llm-retry/src/brand.ts) · [`packages/llm/llm/src/brand.ts:16`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:31`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:43`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:67`](../packages/llm/llm/src/brand.ts) · [`packages/schedule/schedule/src/types.ts:14`](../packages/schedule/schedule/src/types.ts) · [`packages/session/session-title/src/index.ts:42`](../packages/session/session-title/src/index.ts) · [`packages/session/session-title/src/types.ts:17`](../packages/session/session-title/src/types.ts) · [`packages/workflow/workflow/src/types.ts:13`](../packages/workflow/workflow/src/types.ts)
+来源：[`packages/api/session-controller/src/types.ts:403`](../packages/api/session-controller/src/types.ts) · [`packages/attachment/attachment/src/brand.ts:6`](../packages/attachment/attachment/src/brand.ts) · [`packages/compaction/compaction/src/brand.ts:4`](../packages/compaction/compaction/src/brand.ts) · [`packages/core/session/src/types.ts:22`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:38`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:53`](../packages/core/session/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:21`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:33`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:9`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/webhook/src/brand.ts:12`](../packages/experimental/webhook/src/brand.ts) · [`packages/experimental/webhook/src/brand.ts:6`](../packages/experimental/webhook/src/brand.ts) · [`packages/experimental/webhook/src/brand.ts:9`](../packages/experimental/webhook/src/brand.ts) · [`packages/feedback/message-feedback/src/types.ts:14`](../packages/feedback/message-feedback/src/types.ts) · [`packages/goal/goal/src/types.ts:17`](../packages/goal/goal/src/types.ts) · [`packages/interaction/commands/src/brand.ts:31`](../packages/interaction/commands/src/brand.ts) · [`packages/interaction/user-approval/src/types.ts:17`](../packages/interaction/user-approval/src/types.ts) · [`packages/jobs/jobs/src/brand.ts:19`](../packages/jobs/jobs/src/brand.ts) · [`packages/jobs/jobs/src/brand.ts:31`](../packages/jobs/jobs/src/brand.ts) · [`packages/llm/llm-retry/src/brand.ts:4`](../packages/llm/llm-retry/src/brand.ts) · [`packages/llm/llm/src/brand.ts:16`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:31`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:43`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:67`](../packages/llm/llm/src/brand.ts) · [`packages/schedule/schedule/src/types.ts:14`](../packages/schedule/schedule/src/types.ts) · [`packages/session/session-title/src/index.ts:42`](../packages/session/session-title/src/index.ts) · [`packages/session/session-title/src/types.ts:17`](../packages/session/session-title/src/types.ts) · [`packages/workflow/workflow/src/types.ts:13`](../packages/workflow/workflow/src/types.ts)
 
 `string`
 

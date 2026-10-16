@@ -12,10 +12,11 @@
 import { randomUUID } from 'node:crypto'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { JobGeneration } from './brand.ts'
 import { installJobArchiveAdmission } from './archive-admission.ts'
 import type { JobEvents, JobId, JobOutputRead, JobRead, JobSpec, JobView } from './types.ts'
 
-export { JobId } from './types.ts'
+export { JobGeneration, JobId } from './types.ts'
 export type {
   JobAppendOptions,
   JobChannel,
@@ -85,7 +86,7 @@ declare module '@deepseek-ai/cordis' {
  */
 export abstract class JobRegistry extends Service {
   /** Process-local registry identity; native ordinal job ids may repeat after restart. */
-  readonly generation: string = randomUUID()
+  readonly generation: JobGeneration = JobGeneration(randomUUID())
 
   constructor(ctx: Context) {
     // `abstract` erases at runtime, so a composition row naming this package

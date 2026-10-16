@@ -137,4 +137,4 @@ None.
 
 </details>
 
-The registry exposes a process-generation UUID alongside its ordinal job ids. Pair both when retaining an external task identity: ordinals may repeat after a Host restart, which does not resume these jobs.
+The registry exposes a branded `JobGeneration` UUID alongside its ordinal job ids. Pair both when retaining an external task identity: ordinals may repeat after a Host restart, which does not resume these jobs.
