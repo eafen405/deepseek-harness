@@ -136,3 +136,5 @@ kind: "package-reference"
 无。
 
 </details>
+
+注册表在序号任务 ID 之外提供进程代际 UUID。外部保留任务身份时须同时使用两者：Host 重启后序号可能重复，且不会恢复这些任务。

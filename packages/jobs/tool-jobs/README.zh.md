@@ -113,6 +113,10 @@ kind: "package-reference"
 -----
 
 <a id="model-experience"></a>
+## 持久任务事实
+
+原所属 Session 保留 `jobs/lifecycle` 注册、停止中、结算和移除事实，不复制输出字节或归属。`jobs/report` 记录实际完成入队方式，完成通知来源携带 `jobId` 和注册表 `generation`。已有 inbox splice 与 turn 结束事件描述报告的执行、取消和失败。静默注入记录上下文，不宣称已安排推理。这些事实不会在重启后恢复进程资源或输出环。
+
 ## 模型体验
 
 ### 系统提示词

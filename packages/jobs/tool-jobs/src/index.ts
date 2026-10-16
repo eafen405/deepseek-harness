@@ -23,7 +23,35 @@ import { publicJob, renderModelDelta, statusLine } from './render.ts'
 import type { PublicJobSnapshot } from './render.ts'
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    'tool-jobs': { kind: 'tool-jobs' } & ContextFormed
+    'tool-jobs': { kind: 'tool-jobs'; jobId?: JobId; generation?: string } & ContextFormed
+  }
+}
+
+declare module '@deepseek-ai/dsh-session/types' {
+  interface SessionEventMap {
+    /** Minimal retained task state; output bytes remain in the process-local ring. */
+    'jobs/lifecycle': {
+      generation: string
+      phase: 'registered' | 'stopping' | 'settled' | 'removed'
+      job: {
+        id: JobId
+        kind: string
+        label: string
+        status: 'running' | 'stopping' | 'completed' | 'killed' | 'failed'
+        startedAt: number
+        finishedAt?: number
+        detail?: string
+        output: { earliest: number; total: number }
+      }
+    }
+    /** Actual completion enqueue decision; existing inbox and turn events describe its execution. */
+    'jobs/report': {
+      generation: string
+      jobId: JobId
+      delivery: 'wakeup' | 'busy-context' | 'quiet-context' | 'none' | 'failed'
+      messageId?: string
+      reason?: string
+    }
   }
 }
 
@@ -269,42 +297,59 @@ export function apply(ctx: Context, config: Config): void {
   // under, so a mount under one preset never sees another preset's agents;
   // this listener owns delivery, not the choice of whom to deliver to.
   ctx.jobs.events.subscribe({ owners: 'scope' }, (event) => {
+    if (event.type === 'output' || event.type === 'progress') return
+    const owner = event.job.owner === undefined ? undefined : ctx.get('agents')?.get(event.job.owner)
+    if (owner !== undefined) {
+      const job = publicJob(event.job)
+      owner.session.append('jobs/lifecycle', {
+        generation: ctx.jobs.generation, phase: event.type, job: {
+          ...job, id: event.job.id,
+          output: { earliest: event.job.output.earliest, total: event.job.output.total },
+        },
+      })
+    }
     if (event.type === 'removed') {
       killedByModel.delete(event.job.id)
       return
     }
     if (event.type !== 'settled') return
     const delivered = killedByModel.delete(event.job.id) || event.awaited
-    if (delivered || event.cause === 'teardown' || event.job.owner === undefined) return
-    // The destination is the agent registered for the owner session now. An
-    // owned job needed the agent registry to start, so the registry is only
-    // absent here when it left before settlement — and then no inbox is left.
-    const owner = ctx.get('agents')?.get(event.job.owner)
     if (owner === undefined) return
+    const report = (delivery: 'wakeup' | 'busy-context' | 'quiet-context' | 'none' | 'failed', messageId?: string, reason?: string) => {
+      owner.session.append('jobs/report', {
+        generation: ctx.jobs.generation, jobId: event.job.id, delivery,
+        ...messageId === undefined ? {} : { messageId },
+        ...reason === undefined ? {} : { reason },
+      })
+    }
+    if (delivered || event.cause === 'teardown') {
+      report('none', undefined, delivered ? 'collected-by-caller' : 'owner-teardown')
+      return
+    }
     const message = createUserMessage({
-      content: [{
-        type: 'text',
-        text: fitCompletionNotice(event.job),
-      }],
+      content: [{ type: 'text', text: fitCompletionNotice(event.job) }],
       source: {
-        kind: 'tool-jobs',
-        form: 'notice',
-        summary: completionSummary(event.job),
+        kind: 'tool-jobs', form: 'notice', summary: completionSummary(event.job),
+        jobId: event.job.id, generation: ctx.jobs.generation,
       },
     })
-    if (delivery === 'wakeup' && owner.status === 'idle') {
-      if (wakeBudget === undefined) {
-        owner.followup(message)
-        return
+    try {
+      if (delivery === 'wakeup' && owner.status === 'idle') {
+        const spent = spentWakes.get(owner) ?? 0
+        if (wakeBudget === undefined || spent < wakeBudget) {
+          owner.followup(message)
+          if (wakeBudget !== undefined) spentWakes.set(owner, spent + 1)
+          report('wakeup', message.id)
+          return
+        }
       }
-      const spent = spentWakes.get(owner) ?? 0
-      if (spent < wakeBudget) {
-        spentWakes.set(owner, spent + 1)
-        owner.followup(message)
-        return
-      }
+      const busy = owner.status !== 'idle'
+      owner.inject(message)
+      report(busy ? 'busy-context' : 'quiet-context', message.id)
+    } catch (error: unknown) {
+      report('failed', message.id, error instanceof Error ? error.message : String(error))
+      throw error
     }
-    owner.inject(message)
   })
 
   ctx.tools.register(defineTool({

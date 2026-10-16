@@ -113,6 +113,10 @@ Read these pages when the package-level contract is not enough. They move from t
 -----
 
 <a id="model-experience"></a>
+## Durable task facts
+
+The owning Session retains `jobs/lifecycle` registration, stopping, settlement and removal facts, excluding output bytes and ownership copies. `jobs/report` records the actual completion enqueue disposition; completion notice sources carry `jobId` and registry `generation`. Existing inbox splices and turn endings account for report execution, cancellation and failure. Quiet injection records context without claiming scheduled inference. These facts do not restore process resources or output rings after restart.
+
 ## Model Experience
 
 ### System prompt

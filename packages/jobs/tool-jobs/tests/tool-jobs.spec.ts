@@ -6,7 +6,7 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { emitAgentEvent } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import Sessions, { SessionId } from '@deepseek-ai/dsh-session'
 import { bindScopeParent, createScope, scopeOf } from '@deepseek-ai/dsh-scope'
 import { JobId } from '@deepseek-ai/dsh-jobs'
 import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
@@ -32,6 +32,7 @@ interface RegistryConfig {
 
 async function setup(config: ToolJobs.Config = {}, registry: RegistryConfig = {}) {
   const ctx = new Context()
+  await ctx.plugin(Sessions)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   const agentsFiber = await ctx.plugin(AgentRegistry)
@@ -61,7 +62,7 @@ async function fakeAgent(ctx: Context, sessionId: string, delivery: FakeDelivery
     inject: delivery.inject ?? (() => {}),
     followup: delivery.followup ?? (() => {}),
     status: delivery.status ?? 'running',
-    session: { id, header: { version: 0, id, createdAt: 0 } },
+    session: ctx.sessions.get(id) ?? ctx.sessions.create(id),
   } as unknown as Agent
   agentRegistryDisposers.set(agent, await ctx.agents.register(agent))
   agentScopeFibers.set(agent, scopeFiber)
@@ -146,6 +147,7 @@ describe('tool-jobs setup', () => {
 
   it('serves unowned jobs in a composition without an agent registry', async () => {
     const ctx = new Context()
+    await ctx.plugin(Sessions)
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(LocalJobRegistry)
@@ -161,6 +163,7 @@ describe('tool-jobs setup', () => {
 
   it('rejects a config whose default wait exceeds the cap', async () => {
     const ctx = new Context()
+    await ctx.plugin(Sessions)
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(AgentRegistry)
@@ -278,6 +281,7 @@ describe('tool-jobs setup', () => {
     // Bypasses the schemastery defaults on purpose: apply() must stand on its
     // own `??` fallbacks when embedded programmatically without the schema.
     const ctx = new Context()
+    await ctx.plugin(Sessions)
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(AgentRegistry)
@@ -683,6 +687,7 @@ describe('completion notices across scoped mounts', () => {
    */
   it('delivers one notice from the owning scope when two mounts share the registry', async () => {
     const ctx = new Context()
+    await ctx.plugin(Sessions)
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(AgentRegistry)
@@ -703,7 +708,7 @@ describe('completion notices across scoped mounts', () => {
       id: SessionId('sess-scoped'),
       ctx: agentScope.ctx,
       inject,
-      session: { id: SessionId('sess-scoped'), header: { version: 0, id: SessionId('sess-scoped'), createdAt: 0 } },
+      session: ctx.sessions.create(SessionId('sess-scoped')),
     } as unknown as Agent
     const dispose = await ctx.agents.register(owner)
 
@@ -767,6 +772,7 @@ describe('completion notice delivery', () => {
     await tick()
     expect(inject).toHaveBeenCalledTimes(1)
     expect(followup).not.toHaveBeenCalled()
+    expect(owner.session.snapshotEvents().find(event => event.type === 'jobs/report')?.data.delivery).toBe('quiet-context')
   })
 
   it('wakes an idle owner for every completion when no wake budget is set', async () => {
@@ -899,6 +905,7 @@ describe('completion notices', () => {
         kind: 'tool-jobs',
         form: 'notice',
         summary: 'bash pnpm test [status: completed, exit code: 0]',
+        jobId: 'bash-1', generation: ctx.jobs.generation,
       },
     })
   })
@@ -929,6 +936,7 @@ describe('completion notices', () => {
           kind: 'tool-jobs',
           form: 'notice',
           summary: `test-task ${'x'.repeat(109)}…`,
+          jobId: 'test-task-1', generation: ctx.jobs.generation,
         },
       },
     )
@@ -1009,6 +1017,7 @@ describe('completion notices', () => {
     p.settle({ status: 'killed' })
     await tick()
     expect(inject).not.toHaveBeenCalled()
+    expect(owner.session.snapshotEvents().find(event => event.type === 'jobs/report')?.data.delivery).toBe('none')
   })
 
   it('suppresses the notice when a wait returned the terminal state', async () => {
@@ -1023,6 +1032,7 @@ describe('completion notices', () => {
     expect(text(await pending)).toContain('answer')
     await tick()
     expect(inject).not.toHaveBeenCalled()
+    expect(owner.session.snapshotEvents().find(event => event.type === 'jobs/report')?.data.delivery).toBe('none')
   })
 
   it('a timed-out wait withdraws only its own claim; a concurrent wait keeps the settlement covered', async () => {
@@ -1194,4 +1204,40 @@ describe('completion notices', () => {
     // registry's per-listener containment — visible, not swallowed.
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('unexpected inject bug'))
   })
+})
+
+
+describe('durable job accounting', () => {
+  it('records original job lifecycle and correlates the actual completion notice', async () => {
+    const { ctx, toolsFiber, agentsFiber } = await setup()
+    try {
+      const owner = await fakeAgent(ctx, 'durable-job', { status: 'idle' })
+      const task = producer({ owner: owner.id })
+      const id = ctx.jobs.start(task.spec)
+      task.settle({ status: 'completed', detail: 'exit code: 0' })
+      await tick()
+      const lifecycle = owner.session.snapshotEvents().filter(event => event.type === 'jobs/lifecycle')
+      expect(lifecycle.map(event => event.data.phase)).toEqual(['registered', 'settled'])
+      expect(lifecycle[0]?.data.job.id).toBe(id)
+      expect(lifecycle[0]?.data.generation).toBe(ctx.jobs.generation)
+      const report = owner.session.snapshotEvents().find(event => event.type === 'jobs/report')
+      expect(report?.data).toMatchObject({ generation: ctx.jobs.generation, jobId: id, delivery: 'wakeup' })
+      expect(report?.data.messageId).toBeTypeOf('string')
+    } finally { await toolsFiber.dispose(); await agentsFiber.dispose() }
+  })
+})
+
+
+it('records a failed completion enqueue instead of leaving a scheduled report', async () => {
+  const { ctx, toolsFiber, agentsFiber } = await setup()
+  try {
+    const owner = await fakeAgent(ctx, 'failed-report', { inject() { throw new Error('closed inbox') } })
+    const task = producer({ owner: owner.id })
+    const id = ctx.jobs.start(task.spec)
+    task.settle({ status: 'completed' })
+    await tick()
+    const report = owner.session.snapshotEvents().find(event => event.type === 'jobs/report')
+    expect(report?.data).toMatchObject({ jobId: id, delivery: 'failed', reason: 'closed inbox' })
+    expect(ctx.jobs.get(id, owner.id).status).toBe('completed')
+  } finally { await toolsFiber.dispose(); await agentsFiber.dispose() }
 })

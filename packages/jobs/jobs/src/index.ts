@@ -9,6 +9,7 @@
  * @module @deepseek-ai/dsh-jobs
  */
 
+import { randomUUID } from 'node:crypto'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { installJobArchiveAdmission } from './archive-admission.ts'
@@ -83,6 +84,9 @@ declare module '@deepseek-ai/cordis' {
  *   the stream; the ring has no separate lifecycle.
  */
 export abstract class JobRegistry extends Service {
+  /** Process-local registry identity; native ordinal job ids may repeat after restart. */
+  readonly generation: string = randomUUID()
+
   constructor(ctx: Context) {
     // `abstract` erases at runtime, so a composition row naming this package
     // would register a ctx.jobs with no method implementations and fail far
