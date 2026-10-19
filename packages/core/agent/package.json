@@ -22,6 +22,10 @@
       "types": "./lib/types/types.d.ts",
       "default": "./lib/types/types.js"
     },
+    "./session-history": {
+      "types": "./lib/types/session-history.d.ts",
+      "default": "./lib/types/session-history.js"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
