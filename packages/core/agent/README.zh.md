@@ -58,6 +58,19 @@ handle.agent.steer({
 await handle.agent.whenIdle()
 ```
 
+### 通过 Host 接缝读取历史连续性
+
+`@deepseek-ai/dsh-agent/session-history` 暴露非 Client 消费方用来渲染重连会话的窄 Host 可调用折叠：`createSessionHistorySeam(ctx)` 观察 loop 发布的同一批 `agent/assistant-stream` 通知，并返回两个读取器。`assistantStream(sessionId)` 给出重连基线——`revision`，以及在 attempt 仍在进行时的 `activeAttempt` 身份、`startedAfterSeq`、`nextIndex` 与紧凑流；折叠失去连续性时同时给出 `needsResync`。`eventCursor(cursor)` 返回耐久游标：忽略已覆盖的 seq，一次只推进一个 seq，遇到空洞时抛出带 `expectedSeq`/`receivedSeq` 的 `SessionHistoryGapError`，而不是接受它。
+
+```text
+using seam = createSessionHistorySeam(ctx)
+const { baseline, needsResync } = seam.assistantStream(sessionId)
+const cursor = seam.eventCursor(SessionSeq(lastHeldSeq))
+for (const event of followed) cursor.accept(event.seq)   // throws on a gap
+```
+
+revision 重置、属于其他 attempt 的分片、密集索引空洞都会丢弃当前 attempt 并置位 `needsResync`，因此跟随方会从新的快照重新打开，而不是发布带空洞的基线。`expectedSeq` 是最后持有的 seq 加一；修复空洞意味着用新快照报告的截点调用 `reset()`。折叠按会话保存，并在 `agent/disposed` 时丢弃状态；dispose 接缝本身会移除两个监听器。该子路径只依赖 `@deepseek-ai/dsh-llm` 的 `AssistantStreamAccumulator`、本包声明的 `agent/*` 词汇与 `dsh-session` 的序号类型。
+
 ### 将注册限定到单个 agent
 
 `Agent.ctx` 是该 agent 的作用域上下文：通过它进行的注册（工具、提示词段、变量、事件监听器、限制）只对该 agent 生效，并在 dispose（资源释放）时全部撤销。同一机制也是 agent preset 用来让一个会话获得不同能力集、同时不影响其邻居的方式。
@@ -101,6 +114,7 @@ await handle.agent.whenIdle()
 | [`src/consumed-work.ts`](src/consumed-work.ts) | `foldConsumedWork(events)`：日志消费掉的工作最终怎样了 |
 | [`src/model-selection.ts`](src/model-selection.ts) | `installModelSelection`：把一个选择耦合到组装与路由 |
 | [`src/archive-admission.ts`](src/archive-admission.ts) | Workspace 注册表归档准入中的 `turn` 族：运行中的回合及其用户原因取消 |
+| [`src/session-history.ts`](src/session-history.ts) | 公开 Host 接缝：assistant 重连基线、耐久事件游标与 `SessionHistoryGapError` |
 
 ### 注册表与生命周期
 
@@ -176,6 +190,7 @@ await handle.agent.whenIdle()
 - **创建监听器共享初始化生命周期。** `agent/created` 监听器不得等待 `agent.whenIdle()` 或自身所有者的 dispose：这些操作要等待创建完成。所需的异步工具与提示词安装完成后，监听器才可返回。
 - **`cancel()` 默认清空收件箱**：它会中止正在处理的轮次以及排队和 steering 工作；`cancel(cause, { keepInbox: true })` 只中止轮次并保留待处理项，且不存在让轮次继续运行、只中止步骤的操作。
 - **每条附加 `UserMessage` 恰好携带一个 `MessageSource`**：多个插件合并到一条消息上的贡献会归入同一来源，因此该消息无法列出多个生产者。
+- **历史接缝是 fork 内部的窄扩展**：`@deepseek-ai/dsh-agent/session-history` 之所以存在，是因为上游只把同一折叠放在 `@deepseek-ai/dsh-api-session-controller` 内部，而该包既不在 CLI 安装域内，也没有导出它。上游出现等价的公开 Host 接缝后，应替换该子路径，而不是同时维护两份。
 
 <a id="dev-note"></a>
 ### 开发备注

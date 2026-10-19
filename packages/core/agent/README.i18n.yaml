@@ -23,6 +23,9 @@
 /deepseek-ai-dsh-agent/use-this-package/drive-an-agent-s-conversation:
   en: 71e258897e2e7d73
   zh: abf0991012faa17e
+/deepseek-ai-dsh-agent/use-this-package/read-history-continuity-through-the-host-seam:
+  en: 197d5c6cdac34d11
+  zh: 8e780a27aeb19c2e
 /deepseek-ai-dsh-agent/use-this-package/scope-registrations-to-one-agent:
   en: 2594a1e02adea801
   zh: cae8860369728efb
@@ -42,8 +45,8 @@
   en: f6802c7f94f623b3
   zh: cc3885db80765970
 /deepseek-ai-dsh-agent/understand-the-implementation/source-map:
-  en: 7e09b94c79dc97ca
-  zh: 3f9c5455c4dc563a
+  en: 10557b5b72306231
+  zh: a7f0f55d1f905136
 /deepseek-ai-dsh-agent/understand-the-implementation/registry-and-lifecycle:
   en: df92e97cedd0d02e
   zh: f6040c145bffd933
@@ -84,8 +87,8 @@
   en: 07a408b32e49ecaf
   zh: 9684b80cb3c0e75c
 /deepseek-ai-dsh-agent/known-limitations-and-deferred-work:
-  en: 00a2d12980ffe756
-  zh: c8bf69d06d165b36
+  en: fb50ab33588b0a06
+  zh: 999a9c17384593d4
 /deepseek-ai-dsh-agent/known-limitations-and-deferred-work/dev-note:
   en: 217405c92be96543
   zh: 7bc21e6842079a57

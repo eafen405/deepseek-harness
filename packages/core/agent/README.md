@@ -58,6 +58,19 @@ handle.agent.steer({
 await handle.agent.whenIdle()
 ```
 
+### Read history continuity through the Host seam
+
+`@deepseek-ai/dsh-agent/session-history` exposes the narrow Host-callable fold a non-Client consumer uses to render a reconnecting Session: `createSessionHistorySeam(ctx)` observes the same `agent/assistant-stream` publications the loop emits and returns two readers. `assistantStream(sessionId)` answers the reconnect baseline — `revision`, plus the `activeAttempt` identity, `startedAfterSeq`, `nextIndex`, and compact stream when an attempt is still in flight — with `needsResync` when the fold lost continuity. `eventCursor(cursor)` returns the durable cursor that ignores replayed seqs, advances one seq at a time, and throws `SessionHistoryGapError` with `expectedSeq`/`receivedSeq` instead of accepting a hole.
+
+```text
+using seam = createSessionHistorySeam(ctx)
+const { baseline, needsResync } = seam.assistantStream(sessionId)
+const cursor = seam.eventCursor(SessionSeq(lastHeldSeq))
+for (const event of followed) cursor.accept(event.seq)   // throws on a gap
+```
+
+A revision reset, a chunk for another attempt, and a dense-index gap each drop the active attempt and set `needsResync`, so a follower reopens from a fresh snapshot instead of publishing a baseline with a hole. `expectedSeq` is the last held seq plus one; repairing a gap means `reset()` to the cut a new snapshot reports. The fold is per Session and drops its state on `agent/disposed`; disposing the seam removes both listeners. This subpath depends only on the `AssistantStreamAccumulator` in `@deepseek-ai/dsh-llm`, the `agent/*` vocabulary declared here, and `dsh-session` sequence types.
+
 ### Scope registrations to one agent
 
 `Agent.ctx` is the agent's scoped context: registrations made through it (tools, prompt sections, variables, event listeners, restrictions) apply to that agent alone and unwind on disposal. The same mechanism is what agent presets use to give one session a different capability set without affecting its neighbors.
@@ -101,6 +114,7 @@ The package is built on one separation: the public `Agent` surface and registry 
 | [`src/consumed-work.ts`](src/consumed-work.ts) | `foldConsumedWork(events)`: what the log's consumed work became |
 | [`src/model-selection.ts`](src/model-selection.ts) | `installModelSelection`: coupling one selection to assembly and routing |
 | [`src/archive-admission.ts`](src/archive-admission.ts) | The `turn` family of the Workspace registry's archive admission: a running turn and its user-cause cancel |
+| [`src/session-history.ts`](src/session-history.ts) | The public host seam: assistant reconnect baseline, durable event cursor, and `SessionHistoryGapError` |
 
 ### Registry and lifecycle
 
@@ -176,6 +190,7 @@ These limits define when this package needs special care. They are current packa
 - **Creation listeners share the initialization lifetime.** An `agent/created` listener must not await `agent.whenIdle()` or its own owner's disposal: those operations wait for creation to finish. Return only after required asynchronous tool and prompt installation completes.
 - **`cancel()` clears the inbox by default** — it aborts the in-flight turn plus queued and steering work; `cancel(cause, { keepInbox: true })` aborts only the turn and preserves pending items, and there is no step-only abort that keeps the turn running.
 - **Each additional `UserMessage` carries exactly one `MessageSource`** — contributions from several plugins merged onto one message collapse under one source, so the message cannot name several producers.
+- **The history seam is a fork-only narrow extension** — `@deepseek-ai/dsh-agent/session-history` exists because upstream exposes the same fold only inside `@deepseek-ai/dsh-api-session-controller`, which is neither in the CLI installation scope nor exported. Replace that subpath with the upstream public Host seam when one exists instead of maintaining both.
 
 <a id="dev-note"></a>
 ### Dev Note
