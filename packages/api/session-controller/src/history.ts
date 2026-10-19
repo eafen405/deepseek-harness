@@ -18,9 +18,12 @@ import type {
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-subagent'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import type { AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
+import type { SessionAssistantStreamBaseline as SessionAssistantStreamBaselineWire } from '@deepseek-ai/dsh-agent/session-history'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {
   SessionAddress,
+  SessionAssistantStreamBaseline as AssistantStreamWireBaseline,
   SessionAssistantStreamFrame,
   SessionEventEntry,
   SessionFollowRequest,
@@ -33,7 +36,7 @@ import type {
   SessionWireHeader,
   SessionWireEvent,
 } from './types.ts'
-import { SessionAssistantStreamAccumulator } from './assistant-stream.ts'
+import { cursorBeforeNext, SessionAssistantStreamAccumulator } from './assistant-stream.ts'
 
 const DEFAULT_MAX_MESSAGES = 50
 const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
@@ -183,7 +186,7 @@ export class SessionHistoryController {
       snapshotCursor = cursor
       const page = paginate(events, undefined, request.maxMessages ?? DEFAULT_MAX_MESSAGES, cursor, request.turnWindow)
       const assistantStream = request.assistantStream === true
-        ? this.assistantStreams.get(target)?.snapshot() ?? { revision: 0 }
+        ? wireAssistantStreamBaseline(this.assistantStreams.get(target)?.snapshot() ?? { revision: 0 })
         : undefined
       // The accumulator snapshot and this watermark are synchronous. Frames
       // through the cut are represented or superseded by that baseline,
@@ -276,10 +279,6 @@ export class SessionHistoryController {
 
 }
 
-function cursorBeforeNext(nextSeq: SessionLogOffsetType): SessionSeqCursor {
-  return nextSeq === 0 ? -1 : SessionSeq(nextSeq - 1)
-}
-
 function wireAssistantStreamFrame(
   frame: AssistantStreamFrame,
   durableCursor: SessionSeqCursor,
@@ -289,6 +288,57 @@ function wireAssistantStreamFrame(
   return {
     ...frame,
     chunk: frame.chunk as JsonValue,
+  }
+}
+
+/**
+ * Encode one reconnect baseline for the browser wire.
+ *
+ * The durable compact stream is the replay source; the wire carries the same
+ * records as plain JSON arrays so a Client can expand them losslessly.
+ * @param baseline - process-local baseline read from the shared accumulator.
+ * @returns the same baseline with every compact record copied into wire JSON.
+ */
+function wireAssistantStreamBaseline(
+  baseline: SessionAssistantStreamBaselineWire,
+): AssistantStreamWireBaseline {
+  const attempt = baseline.activeAttempt
+  if (attempt === undefined) return { revision: baseline.revision }
+  return {
+    revision: baseline.revision,
+    activeAttempt: {
+      attemptId: attempt.attemptId,
+      startedAfterSeq: attempt.startedAfterSeq,
+      turn: attempt.turn,
+      step: attempt.step,
+      nextIndex: attempt.nextIndex,
+      stream: attempt.stream.map(wireAssistantStreamRecord),
+    },
+  }
+}
+
+/**
+ * Encode one compact Assistant stream record as wire JSON.
+ * @param record - record from an accumulator snapshot.
+ * @returns the same fields as a JSON-only value.
+ */
+function wireAssistantStreamRecord(record: AssistantStreamRecord): JsonValue {
+  switch (record.type) {
+    case 'text-chunks':
+    case 'reasoning-chunks':
+      return { type: record.type, time0: record.time0, index: record.index, dt: [...record.dt], texts: [...record.texts] }
+    case 'tool-call-chunks':
+      return {
+        type: record.type,
+        time0: record.time0,
+        index: record.index,
+        dt: [...record.dt],
+        id: record.id,
+        ...record.name === undefined ? {} : { name: record.name },
+        args: [...record.args],
+      }
+    case 'chunk':
+      return { type: record.type, time: record.time, chunk: record.chunk as JsonValue }
   }
 }
 
