@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import Loader, { type ModuleLoaderV2 } from '@deepseek-ai/cordis-plugin-loader'
+import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import * as AgentPlugin from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -46,13 +46,16 @@ async function loadYaml(lines: readonly string[]): Promise<Context> {
     // A product plugin imports the seam by this exact specifier.
     ['@deepseek-ai/dsh-agent/session-history', SessionHistory],
   ])
+  const native = context.loader.internal
+  if (native === undefined) throw new Error('the vendored Loader exposes no internal module loader')
+  // Keep the runtime's own loader shape and replace only the module import.
   context.loader.internal = {
-    version: 'v2',
+    ...native,
     async import(specifier: string) {
       if (!modules.has(specifier)) throw new Error(`unexpected Loader import: ${specifier}`)
       return modules.get(specifier)
     },
-  } as ModuleLoaderV2
+  }
   await context.loader.create({
     name: 'cordis:include',
     config: { path: pathToFileURL(configPath).href },
