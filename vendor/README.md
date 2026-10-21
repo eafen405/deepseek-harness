@@ -58,6 +58,8 @@ Keep this log exhaustive — every divergence from upstream must be listed.
 
 23. **`loader/src/config/entry.ts` module identity**: retains each entry's raw import result as `moduleNamespace`, before plugin export normalization. HMR matches that object to Node's cached module namespace and updates it after a successful reload. `EntryTree.import()` keeps its existing arguments and return value; `loader/README.md` documents the additive field.
 
+24. **Loader cyclic entry ids across `loader/src/config/{entry,group,tree,errors}.ts` and `vendor/loader/src/index.ts`**: `EntryGroup.create` rejects moving an entry under itself or one of its descendants, and `Entry.disabled`/`getOuterStack` detect a cyclic parent chain and throw `EntryStructureError` instead of walking it forever. A group nested under a group with the same id previously reused the loader's single `Entry` for both parent and child; booting such a profile burned 100% CPU with no output. `EntryGroup.create` and `EntryTree.create` take `EntryCreateOptions`, whose id is optional because the tree assigns one when omitted; an explicit id was always accepted at runtime. `packages/boot/app-boot/src/{index,profile}.ts` also validates composed ids before mounting (`composeEntries` and `mountRootInclude`), so a duplicate fails at composition time rather than during the loader walk. Covered by `packages/boot/app-boot/tests/duplicate-entry-id.spec.ts`.
+
 ## Sync procedure
 
 To update a vendored package from upstream:

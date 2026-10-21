@@ -1,6 +1,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
-import { Entry, type EntryOptions } from './entry.ts'
+import { Entry, type EntryCreateOptions, type EntryOptions } from './entry.ts'
 import { EntryTree } from './tree.ts'
+import { EntryStructureError } from './errors.ts'
 
 /** Runtime owner for a list of child loader entries. */
 export class EntryGroup {
@@ -17,9 +18,21 @@ export class EntryGroup {
     return this.ctx
   }
 
-  async create(options: Omit<EntryOptions, 'id'>) {
+  async create(options: EntryCreateOptions) {
     const id = this.tree.ensureId(options)
     const entry: Entry = this.tree.store[id] ??= new Entry(this.ctx.loader)
+    // Moving an entry between groups is supported, but moving it under itself
+    // or one of its own descendants makes the parent chain cyclic; the
+    // `disabled` walk would then never terminate. Reject the move here.
+    const seen = new Set<Entry>()
+    for (let owner = this.ctx.fiber.entry; owner && !seen.has(owner); owner = owner.parent?.ctx.fiber.entry) {
+      seen.add(owner)
+      if (owner === entry) {
+        throw new EntryStructureError(
+          `loader entry ${JSON.stringify(id)} cannot be moved under itself or one of its descendants`,
+        )
+      }
+    }
     // Entry may be moved from another group,
     // so we need to update the parent reference.
     entry.parent = this
@@ -56,6 +69,9 @@ export class EntryGroup {
     await Promise.all(ids.map(async (id) => {
       if (newMap[id]) {
         await this.create(newMap[id]).catch((error) => {
+          // A structural error is not a plugin that failed to load: continuing
+          // would leave a half-built tree, so let it fail the boot.
+          if (error instanceof EntryStructureError) throw error
           this.ctx.logger.error(error)
         })
       } else {

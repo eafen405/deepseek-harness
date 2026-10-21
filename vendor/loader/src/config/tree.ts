@@ -1,6 +1,6 @@
 import { composeError, Context } from '@deepseek-ai/cordis'
 import { isNonNullable, type Dict } from '@deepseek-ai/cosmokit'
-import { Entry, type EntryOptions } from './entry.ts'
+import { Entry, type EntryCreateOptions, type EntryOptions } from './entry.ts'
 import { EntryGroup } from './group.ts'
 
 /** Mutable tree of loader entries. Persistence is supplied by subclasses. */
@@ -79,7 +79,7 @@ export abstract class EntryTree {
   }
 
   /** Create an entry in the root group or a nested group. */
-  async create(options: Omit<EntryOptions, 'id'>, parent: string | null = null, position = Infinity) {
+  async create(options: EntryCreateOptions, parent: string | null = null, position = Infinity) {
     const group = this.resolveGroup(parent)
     group.data.splice(position, 0, options as EntryOptions)
     group.tree.write()

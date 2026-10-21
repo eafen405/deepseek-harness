@@ -5,6 +5,7 @@ import { EntryGroup } from './group.ts'
 import { EntryTree } from './tree.ts'
 import { evaluate, isJsExpr } from './utils.ts'
 import { equalExceptVolatile } from './diff.ts'
+import { EntryStructureError } from './errors.ts'
 
 /** Serialized plugin entry options stored in loader config files. */
 export interface EntryOptions {
@@ -21,6 +22,12 @@ export interface EntryOptions {
   /** Required services or service intercept config for this entry. */
   inject?: Inject | null
 }
+
+/**
+ * Options accepted when creating an entry. An explicit id is optional: when it
+ * is omitted the tree assigns one, and when it is present the tree uses it.
+ */
+export type EntryCreateOptions = Omit<EntryOptions, 'id'> & { id?: string }
 
 function takeEntries(object: {}, keys: string[]) {
   const result: [string, any][] = []
@@ -77,7 +84,16 @@ export class Entry {
     // group is always enabled
     if (this.options.group) return false
     let entry: Entry | undefined = this
+    const seen = new Set<Entry>()
     do {
+      // A cyclic parent chain has no final answer. Fail loudly instead of
+      // spinning forever in this synchronous walk.
+      if (seen.has(entry)) {
+        throw new EntryStructureError(
+          `loader entry ${JSON.stringify(this.options.id)} has a cyclic parent chain`,
+        )
+      }
+      seen.add(entry)
       if (this.disabledOf(entry.options)) return true
       entry = entry.parent.ctx.fiber.entry
     } while (entry)
@@ -199,7 +215,13 @@ export class Entry {
   getOuterStack = () => {
     let entry: Entry | undefined = this
     const result: string[] = []
+    const seen = new Set<Entry>()
     do {
+      if (seen.has(entry)) {
+        result.push('    at <cyclic loader entry chain>')
+        break
+      }
+      seen.add(entry)
       result.push(`    at ${entry.parent.tree.ctx.baseUrl}#${entry.options.id}`)
       entry = entry.parent.ctx.fiber.entry
     } while (entry)

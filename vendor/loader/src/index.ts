@@ -9,6 +9,8 @@ import { interpolate } from './config/utils.ts'
 
 /** Re-export entry node APIs. */
 export * from './config/entry.ts'
+/** Re-export loader structure errors. */
+export * from './config/errors.ts'
 /** Re-export nested entry group APIs. */
 export * from './config/group.ts'
 /** Re-export service isolation helpers. */

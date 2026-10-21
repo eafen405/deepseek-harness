@@ -24,7 +24,7 @@
 import { createRequire } from 'node:module'
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
-import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
+import { EntryStructureError, type EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { applyEntryPatches, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type { DshBundleManifest, DshPackageManifest } from '@deepseek-ai/dsh-package-manifest'
@@ -805,6 +805,36 @@ export function loadProfile(
 }
 
 /**
+ * Reject a composition whose loader entry ids are not unique. The loader keeps
+ * one entry per id in a tree-wide store, so a duplicate makes one entry serve
+ * as both parent and child; the old `disabled` walk then never terminated.
+ * @param entries - the composed root rows.
+ */
+export function assertUniqueEntryIds(entries: readonly EntryOptions[]): void {
+  const seen = new Map<string, string>()
+  const visit = (rows: readonly EntryOptions[], parent: string): void => {
+    for (const row of rows) {
+      // An omitted id is assigned by the loader, so it cannot collide.
+      const id = typeof row.id === 'string' && row.id !== '' ? row.id : undefined
+      const path = id === undefined || parent === '' ? id ?? parent : `${parent}:${id}`
+      if (id !== undefined) {
+        const previous = seen.get(id)
+        if (previous !== undefined) {
+          throw new EntryStructureError(
+            `duplicate loader entry id ${JSON.stringify(id)} at ${path} (already declared at ${previous})`,
+          )
+        }
+        seen.set(id, path)
+      }
+      if (row.group === true && Array.isArray(row.config)) {
+        visit(row.config as EntryOptions[], path)
+      }
+    }
+  }
+  visit(entries, '')
+}
+
+/**
  * Compose patch layers into the effective entry list over an empty root —
  * the same single `applyEntryPatches` call the boot include makes, so flag
  * derivation and config dumps see exactly what mounts.
@@ -815,8 +845,10 @@ export function loadProfile(
 export function composeEntries(
   layers: readonly PatchOptions[][], warn: (message: string) => void = () => {},
 ): EntryOptions[] {
-  return applyEntryPatches([], structuredClone(layers.flat()), (message: string, ...args: unknown[]) => {
+  const rows = applyEntryPatches([], structuredClone(layers.flat()), (message: string, ...args: unknown[]) => {
     let index = 0
     warn(message.replace(/%C/g, () => JSON.stringify(args[index++])))
   })
+  assertUniqueEntryIds(rows)
+  return rows
 }

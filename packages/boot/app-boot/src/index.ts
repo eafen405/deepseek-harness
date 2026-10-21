@@ -25,6 +25,7 @@ export {
   setProfileVersionExemption, type ProfileCompatibility,
 } from './profile-compatibility.ts'
 import { prepareProfilePatches } from './compatibility-preflight.ts'
+import { assertUniqueEntryIds } from './profile.ts'
 export { prepareProfileEntries, prepareProfilePatches } from './compatibility-preflight.ts'
 export { readPluginMeta, resolvePluginResource } from './package-meta.ts'
 export { ON_DEMAND_BUNDLES, OFFICIAL_ON_DEMAND_CATALOG, type OfficialBundleCatalogEntry } from './official-bundles.ts'
@@ -569,6 +570,10 @@ export async function mountRootInclude(
   // The launcher's own copy is prepared here: compatibility decisions must be made before the root
   // Include imports anything, and they change no profile patch layer, manifest, or bundle list.
   const prepared = prepareProfilePatches(ctx, [...patches], pathToFileURL(dirname(absoluteConfigPath)).href + '/', binName)
+  // The loader keys entries by raw id in one tree-wide store. Reject a duplicate
+  // here, before mounting: a nested group reusing an ancestor's id otherwise
+  // makes one entry its own parent and the `disabled` walk spins forever.
+  assertUniqueEntryIds(applyEntryPatches([], structuredClone(prepared), () => {}))
   const includeConfig: Include.Config = {
     path: pathToFileURL(absoluteConfigPath).href,
     ...prepared.length > 0 ? { patches: prepared } : {},
