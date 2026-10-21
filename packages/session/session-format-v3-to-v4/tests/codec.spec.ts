@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SessionFormatEventCollector } from '@deepseek-ai/dsh-session-format'
-import type { SessionFormatEvent, SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
+import type { SessionFormatEvent, SessionFormatHeader, SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { releasedV2SessionFormatCodec } from '@deepseek-ai/dsh-session-format-v2-to-v3'
 import { assertReleasedV4Header, assertV4RowAdmission, releasedV4SessionFormatCodec, restoreReleasedV4Artifact } from '../src/index.ts'
@@ -51,12 +51,15 @@ describe('V4 framing and restoration', () => {
     expect(releasedV4SessionFormatCodec.decodeHeader(physical)).toEqual(owned)
     expect(releasedV4SessionFormatCodec.createDecoder(physical, 'strict').header).toEqual(owned)
     expect(restore([fact], owned)).toEqual({ header: owned, events: [fact], inheritedEventCount: 0 })
+    // The owner is deliberately outside the logical header type; the codec's
+    // runtime refusal is the assertion under test. Keep the cast in this one
+    // named seam rather than weakening the public input type.
+    const encodeMalformedHeader = (candidate: unknown) =>
+      releasedV4SessionFormatCodec.encodeHeader(candidate as SessionFormatHeader, 0)
     for (const owner of ['', 7, null]) {
       expect(() => { assertReleasedV4Header({ ...header, owner }) }).toThrow(/owner/)
       expect(() => releasedV4SessionFormatCodec.decodeHeader({ type: 'session', ...header, owner })).toThrow(/owner/)
-      // The malformed owner is deliberately outside the logical header type.
-      const malformed = { ...header, owner } as unknown as Parameters<typeof releasedV4SessionFormatCodec.encodeHeader>[0]
-      expect(() => releasedV4SessionFormatCodec.encodeHeader(malformed, 0)).toThrow(/owner/)
+      expect(() => encodeMalformedHeader({ ...header, owner })).toThrow(/owner/)
     }
     // The unowned legacy header stays ownerless: v4 never invents an owner.
     expect(Object.hasOwn(releasedV4SessionFormatCodec.decodeHeader({ type: 'session', ...header }), 'owner')).toBe(false)

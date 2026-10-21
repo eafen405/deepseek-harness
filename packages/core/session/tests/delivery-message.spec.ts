@@ -85,10 +85,12 @@ describe('delivery/message', () => {
       )
     }).toThrow(/deliveryId/)
     // Forge a user-role message explicitly so inference cannot widen the payload.
-    const payload = event.data as unknown as Record<string, unknown>
-    const forged: Record<string, unknown> = {
-      ...payload,
-      message: { ...(payload['message'] as Record<string, unknown>), role: 'user' },
+    // The guard narrows the event-data union to the delivery payload; the spread
+    // keeps that payload intact until this single, deliberate forgery.
+    if (!('message' in event.data)) throw new Error('delivery/message must carry a message')
+    const forged = {
+      ...event.data,
+      message: { ...event.data.message, role: 'user' as const },
     }
     expect(() => {
       validateSessionEventData(
