@@ -35,7 +35,7 @@ changes:
     after: "cd9d35eaa760a75ee113b8bafe9ad0ff0bee068162e0050265cb1a227e9c2bf4"
     decision: same-version
   - root: "event:agent/inbox/spliced"
-    previous: "2026-10-05-working-directory-attribution"
+    previous: "2026-10-13-user-rpc-principal"
     after: "e5191bfd864f7fce0925a49543d264fda77f3b0c2d1318d9ae6f7e368603c2c9"
     decision: same-version
   - root: "event:assistant/message"
@@ -47,15 +47,15 @@ changes:
     after: "d0bf3f4a24ee256aed92733c61ab11ca99c00000967cb6dcc5dbb126dc1a4aca"
     decision: same-version
   - root: "event:developer/message"
-    previous: "2026-10-05-working-directory-attribution"
+    previous: "2026-10-13-user-rpc-principal"
     after: "0208cfb531359fef324f0b6bd7e62b05a476090a3a474352051ed40b6dcc18ae"
     decision: same-version
   - root: "event:session/title-llm-request"
-    previous: "2026-10-07-title-reasoning-effort"
+    previous: "2026-10-13-user-rpc-principal"
     after: "2a3000d006871fc6fa47f50d9ca981aaef048f53509ed9f78f77100d2ce63024"
     decision: same-version
   - root: "event:user/message"
-    previous: "2026-10-05-working-directory-attribution"
+    previous: "2026-10-13-user-rpc-principal"
     after: "96537dbac5eff41560969c2163c00a81c4caa6c5b1652c8b893cedf7d5ffaff4"
     decision: same-version
 ```

@@ -108,6 +108,21 @@ Host `ctx.connection` members consumed by transport-independent adapters.
 createSharedFetchHandler(channel: '/api'): ConnectionFetchHandler
 
 /**
+ * Apply Connection's Host/Origin checks and browser authentication to
+ * another Web route.
+ * @param request - request headers from the HTTP or upgrade request.
+ * @returns rejection status, or undefined when the route may accept the request.
+ */
+requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection
+
+/**
+ * Admit an HTTP request against its signed browser or API credential and live Peer.
+ * @param request - request headers from the HTTP or upgrade request.
+ * @returns the credential's Peer, or the rejection status.
+ */
+admit(request: ConnectionTrustRequest): PeerAdmission
+
+/**
  * Apply the Host/Origin fence without authenticating.
  * Product-owned routes outside the shared channel authenticate themselves:
  * a sign-in endpoint must stay reachable before any credential exists.
@@ -117,36 +132,29 @@ createSharedFetchHandler(channel: '/api'): ConnectionFetchHandler
 fence(request: ConnectionTrustRequest): 403 | undefined
 
 /**
- * Apply Connection's Host/Origin checks and browser authentication to
- * another Web route.
- * @param request - request headers from the HTTP or upgrade request.
- * @returns rejection status, or undefined when the route may accept the request.
+ * Dispose the Peer one subject was admitted as, closing the streams admitted
+ * as it. The credential's own validity stays owned by its authenticator: a
+ * revoked subject is admitted again on its next identified request.
+ * @param subject - key recorded by an authenticator.
+ * @returns settles once the subject's Peer scope has quiesced.
  */
-requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection
+revokePrincipal(subject: string): Promise<void>
 
 /**
- * Admit one request: it passes {@link requestRejection} and speaks for the
- * Peer its credential identifies, or it is refused with that status.
- * @param request - request headers from the HTTP or upgrade request.
- * @returns the admitted Peer, or the rejection status.
+ * Create an independent in-process Peer, disposed with the Context that read `ctx.connection`.
+ * @param options - fixed principal and optional interaction participation (default `answer`).
+ * @returns a new Peer distinct from every other Peer.
  */
-admit(request: ConnectionTrustRequest): PeerAdmission
+createPeer(options: { readonly principal: Principal; readonly interactions?: 'answer' | 'none' }): PeerScope
 
 /**
- * The principal a Peer speaks for.
- * @param peer - Peer handed to a handler or read from `invocation.peer`.
- * @returns the principal, or undefined for the operator and unknown Peers.
+ * Claim a physical socket for an API Peer; browser sockets share their owner Peer.
+ * @param request - authenticated upgrade request headers.
+ * @returns the Peer and idempotent release, or 409 for duplicate API ownership.
+ * The carrier releases on socket termination or failed upgrade; release removes
+ * API admission synchronously without cancelling independent HTTP calls.
  */
-principalOf(peer: PeerScope): ConnectionPrincipal | undefined
-
-/**
- * Dispose one principal's Peer scope, closing the streams admitted as it.
- * The credential's own validity stays owned by its authenticator: a revoked
- * principal is admitted again on its next identified request.
- * @param principalId - principal key recorded by an authenticator.
- * @returns settles once the principal's scope has quiesced.
- */
-revokePrincipal(principalId: string): Promise<void>
+admitConnection(request: ConnectionTrustRequest): ConnectionAdmission
 
 /**
  * Authenticate one frontend index request, owning a token redirect or 401.
@@ -166,7 +174,25 @@ authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexRespons
 authenticatedUrl(baseUrl: string): string
 ```
 
+Types: [Principal](typert.zh.md)
+
 Source: [`packages/client/connection/src/rpc.ts`](../../packages/client/connection/src/rpc.ts)
+
+<a id="ctxwebapp--webapp"></a>
+
+### `ctx.webApp` — `WebApp`
+
+The Web GUI this process serves, provided by the `web-runtime` row.
+
+```ts cordis-catalog
+/**
+ * The URL this GUI advertises, also used for `DSH_WEB_URL` and the startup URL line.
+ * @returns the configured `publicUrl`, otherwise the listener origin.
+ */
+getAdvertisedUrl(): string
+```
+
+Source: [`packages/bundle/web-app/src/index.ts`](../../packages/bundle/web-app/src/index.ts)
 
 <a id="ctxwebserver--webserver"></a>
 
@@ -175,6 +201,14 @@ Source: [`packages/client/connection/src/rpc.ts`](../../packages/client/connecti
 The browser HTTP carrier service. Activation loads any configured TLS material, then listens immediately; a material or listen failure rejects initialization, and the boot process reports the failed fiber. Route registration order does not affect requests because configured named routes must be distinct, and the fallback handler answers anything not yet claimed during startup with 404 until its owner registers.
 
 ```ts cordis-catalog
+/**
+ * The root URL local clients use to reach the bound listener: the protocol,
+ * the {@link bindUrlHost} form of the bind address, and the listening port.
+ * @returns the origin, for example `http://127.0.0.1:3080`.
+ * @throws before `listen` binds a port, or when the bind address has no URL form.
+ */
+getOrigin(): string
+
 /**
  * Register a named route. Duplicate (kind, path) throws — route patterns are
  * a composition-level contract, so a collision is a misconfiguration.

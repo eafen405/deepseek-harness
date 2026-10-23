@@ -1,5 +1,5 @@
 /**
- * Second-credential admission: the browser cookie stays the operator's
+ * Second-credential admission: the browser cookie stays the owner Peer's
  * credential, while a registered authenticator lets one request speak for its
  * own principal Peer.
  */
@@ -18,6 +18,13 @@ import {
   type HostConnectionHandle,
 } from '../src/index.ts'
 import { provideBrowserCredentials } from './browser-credentials.ts'
+
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface PrincipalMap {
+    /** Test identity: one product-level user, keyed by its stable subject. */
+    user: { readonly kind: 'user'; readonly id: string }
+  }
+}
 
 /** Structural webServer fake recording both route registries. */
 function fakeHttpServer(
@@ -125,13 +132,13 @@ function bearerAuthenticator(tokens: ReadonlyMap<string, string>): ConnectionAut
       const value = headerOf(request.headers, 'authorization')
       if (value === undefined || !value.startsWith('Bearer ')) return undefined
       const id = tokens.get(value.slice('Bearer '.length))
-      return id === undefined ? undefined : { id }
+      return id === undefined ? undefined : { subject: id, principal: { kind: 'user', id } }
     },
   }
 }
 
 describe('connection second-credential admission', () => {
-  it('admits a bearer request as its own principal Peer and keeps the browser cookie on the operator', async () => {
+  it('admits a bearer request as its own principal Peer and keeps the browser cookie on the owner Peer', async () => {
     const { connection, dispose } = await mounted()
     try {
       connection.authenticators.register(bearerAuthenticator(new Map([['alpha', 'user:1'], ['beta', 'user:2']])))
@@ -146,16 +153,16 @@ describe('connection second-credential admission', () => {
       }
       expect(alpha.peer.id).toBe(alphaAgain.peer.id)
       expect(beta.peer.id).not.toBe(alpha.peer.id)
-      expect(alpha.peer).not.toBe(connection.operator)
-      expect(connection.principalOf(alpha.peer)).toEqual({ id: 'user:1' })
-      expect(connection.principalOf(connection.operator)).toBeUndefined()
+      expect(alpha.peer).not.toBe(connection.browserPeer)
+      expect(alpha.peer.principal).toEqual({ kind: 'user', id: 'user:1' })
+      expect(connection.browserPeer.principal).toEqual({ kind: 'owner' })
 
       const browser = connection.admit(fakeRequest({
         host: 'localhost',
         cookie: browserCookie(connection, 'localhost'),
       }))
       if (!('peer' in browser)) throw new Error('the browser cookie must be admitted')
-      expect(browser.peer).toBe(connection.operator)
+      expect(browser.peer).toBe(connection.browserPeer)
     } finally {
       await dispose()
     }
@@ -168,7 +175,7 @@ describe('connection second-credential admission', () => {
       const identity = { id: 'unset' }
       connection.rpc.intercept('/api', endpoint => endpoint === 'probe/echo', async (_endpoint, _payload, _signal, peer) => {
         identity.id = peer.id
-        return { ok: true, value: { principal: connection.principalOf(peer)?.id ?? null } }
+        return { ok: true, value: { principal: peer.principal.kind === 'user' ? peer.principal.id : null } }
       })
       const route = routes.find(candidate => candidate.path === '/api')
       if (route === undefined) throw new Error('the /api route is not mounted')
