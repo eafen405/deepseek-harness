@@ -924,7 +924,7 @@ describe('completion notices', () => {
         kind: 'tool-jobs',
         form: 'notice',
         summary: 'bash pnpm test [status: completed, exit code: 0]',
-        jobId: 'bash-1', generation: ctx.jobs.generation,
+        jobId: startedId(ctx, 'bash-1'), generation: ctx.jobs.generation,
       },
     })
   })
@@ -955,7 +955,7 @@ describe('completion notices', () => {
           kind: 'tool-jobs',
           form: 'notice',
           summary: `test-task ${'x'.repeat(109)}…`,
-          jobId: 'test-task-1', generation: ctx.jobs.generation,
+          jobId: startedId(ctx, 'test-task-1'), generation: ctx.jobs.generation,
         },
       },
     )

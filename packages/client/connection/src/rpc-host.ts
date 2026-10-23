@@ -194,6 +194,9 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @returns a handle that unregisters it and revokes the subjects it admitted.
    */
   private registerAuthenticator(owner: Context, authenticator: ConnectionAuthenticator): ConnectionAuthenticatorRegistration {
+    for (const existing of this.registeredAuthenticators) {
+      if (existing.name === authenticator.name) throw new Error(`an authenticator named ${authenticator.name} is already registered`)
+    }
     this.registeredAuthenticators.add(authenticator)
     let disposed: Promise<void> | undefined
     const registration: ConnectionAuthenticatorRegistration = {
