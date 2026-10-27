@@ -435,7 +435,7 @@ export type Config = LocalConfig
 ## `@deepseek-ai/dsh-client-connection`
 
 - `inject`: `credentials`
-- `source`: [`packages/client/connection/src/index.ts:96`](../packages/client/connection/src/index.ts)
+- `source`: [`packages/client/connection/src/index.ts:100`](../packages/client/connection/src/index.ts)
 
 ```ts config-catalog
 /** Browser authentication, request limits, and connection recovery configuration. */
@@ -689,11 +689,31 @@ export type ThemePreference = typeof THEME_PREFERENCES[number]
 ## `@deepseek-ai/dsh-compaction-basic`
 
 - `inject`: `llm` · `tokenMeter` · `sessions`
-- `source`: [`packages/compaction/compaction-basic/src/types.ts:40`](../packages/compaction/compaction-basic/src/types.ts)
+- `refs`: `Volatile` (`@deepseek-ai/cordis`)
+- `source`: [`packages/compaction/compaction-basic/src/types.ts:62`](../packages/compaction/compaction-basic/src/types.ts)
 
 ```ts config-catalog
+/**
+ * Configuration as the plugin receives it after Loader normalization, where
+ * `thresholdTokens` is a stable reference rather than a snapshot. The engine
+ * reads that reference once per pressure decision.
+ */
+export interface BasicCompactionRuntimeConfig extends Omit<BasicCompactionConfig, 'thresholdTokens'> {
+  /** Live absolute pressure ceiling; `get()` returns `undefined` while unset. */
+  thresholdTokens?: Volatile<number | undefined>
+}
+
 /** Basic compaction configuration with an optional exact-target policy table. */
 export interface BasicCompactionConfig extends CompactionPolicyConfig {
+  /**
+   * Deployment-wide absolute pressure ceiling in tokens, applied to every
+   * route. The trigger becomes the smallest of this value, the window fraction,
+   * and the capacity left after the routed output reservation plus
+   * `headroomTokens`; unset leaves the capacity terms alone. Positive integer
+   * that must stay above the resolved retention budget. A saved change reaches
+   * later pressure decisions without remounting the plugin.
+   */
+  thresholdTokens?: number
   /** Exact provider/model overrides; duplicate targets fail plugin load. */
   modelPolicies?: ModelCompactPolicyConfig[]
   /** Enable automatic step-boundary pressure and overflow-recovery listeners. Defaults to `true`. */

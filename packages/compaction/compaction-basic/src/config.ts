@@ -7,7 +7,7 @@
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type {
-  BasicCompactionConfig,
+  BasicCompactionRuntimeConfig,
   CompactionPolicyConfig,
   ModelCompactPolicyConfig,
   ResolvedCompactSpec,
@@ -38,6 +38,7 @@ const POLICY_CONFIG_KEYS = [
 /** Complete public top-level configuration key set. */
 const BASIC_COMPACT_CONFIG_KEYS: ReadonlySet<string> = new Set([
   ...POLICY_CONFIG_KEYS,
+  'thresholdTokens',
   'modelPolicies',
   'auto',
 ])
@@ -62,10 +63,10 @@ export class TargetPressureConfigError extends Error {
 
 /**
  * Resolve and validate service defaults plus exact-target partial overrides.
- * @param config - untrusted plugin configuration after Loader normalization.
+ * @param config - untrusted plugin configuration after Loader normalization; `thresholdTokens` stays a live reference the engine owns.
  * @returns detached immutable defaults and validated exact-target overrides.
  */
-export function resolveConfig(config: BasicCompactionConfig = {}): ResolvedConfig {
+export function resolveConfig(config: BasicCompactionRuntimeConfig = {}): ResolvedConfig {
   validateKeys(config, BASIC_COMPACT_CONFIG_KEYS, 'BasicCompactionConfig')
   validatePolicy(config, 'BasicCompactionConfig')
   if (config.auto !== undefined && typeof config.auto !== 'boolean') {
@@ -141,19 +142,22 @@ export function resolveTargetPolicy(
 /**
  * Scale one routed policy into concrete token budgets for its model capacity.
  *
- * Pressure is capped by both the window fraction and the capacity remaining
- * after the routed output reservation plus compaction headroom. Retention scales
- * the message budget before headroom is deducted.
+ * Pressure is capped by the window fraction, the capacity remaining after the
+ * routed output reservation plus compaction headroom, and the deployment's
+ * absolute ceiling when one is configured. Retention scales the message budget
+ * before headroom is deducted.
  *
  * @param policy - merged policy for the exact routed target.
  * @param contextWindow - positive adapter-owned capacity for that target.
  * @param reservedCompletionTokens - output tokens one routed request reserves.
+ * @param absoluteThresholdTokens - deployment-wide ceiling read for this decision, or `undefined` when unconfigured.
  * @returns detached immutable pressure and retention budgets.
  */
 export function resolveCompactSpec(
   policy: ResolvedTargetPolicy,
   contextWindow: number,
   reservedCompletionTokens: number,
+  absoluteThresholdTokens?: number,
 ): ResolvedCompactSpec {
   const targetKey = `${policy.target.provider}/${policy.target.model}`
   if (!Number.isInteger(contextWindow) || contextWindow <= 0) {
@@ -188,9 +192,17 @@ export function resolveCompactSpec(
       + 'compaction headroomTokens, or configure a larger adapter model contextWindow',
     )
   }
+  if (absoluteThresholdTokens !== undefined && (!Number.isInteger(absoluteThresholdTokens)
+    || absoluteThresholdTokens <= 0)) {
+    throw new TargetPressureConfigError(
+      targetKey,
+      `BasicCompactionConfig: thresholdTokens (${absoluteThresholdTokens}) must be a positive integer`,
+    )
+  }
   const thresholdTokens = Math.floor(Math.min(
     contextWindow * policy.thresholdRatio,
     pressureBudgetTokens,
+    absoluteThresholdTokens ?? Number.POSITIVE_INFINITY,
   ))
   const retainTokens = policy.retainTokens === undefined
     ? Math.floor(messageBudgetTokens * policy.retainRatio)

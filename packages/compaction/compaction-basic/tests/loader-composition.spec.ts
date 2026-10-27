@@ -2,16 +2,92 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import LlmRuntime from '@deepseek-ai/dsh-llm'
-import SessionStore from '@deepseek-ai/dsh-session'
+import LlmRuntime, { createMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
+import type { BasicCompactionRuntimeConfig } from '@deepseek-ai/dsh-compaction-basic'
+import type { SummaryResult } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
 import ToolResultPruner from '@deepseek-ai/dsh-compaction-tool-result-pruner'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+
+const SIGNAL = new AbortController().signal
+
+/** One `loader/volatile-update` payload: committed config paths as key arrays. */
+type VolatilePaths = readonly (readonly string[])[]
+
+/** The real backend with only the provider call replaced, so a Loader test can drive a full decision. */
+class StubCompactionEngine extends BasicCompactionEngine {
+  static mounts = 0
+
+  readonly volatileUpdates: VolatilePaths[] = []
+
+  constructor(ctx: Context, config: BasicCompactionRuntimeConfig = {}) {
+    super(ctx, config)
+    StubCompactionEngine.mounts += 1
+    ctx.on('loader/volatile-update', paths => this.volatileUpdates.push(paths))
+  }
+
+  protected override async summarize(): Promise<SummaryResult> {
+    return {
+      summary: [{ type: 'text', text: 'loader checkpoint' }],
+      provider: 'stub',
+      model: 'stub',
+      maxTokens: 16,
+    }
+  }
+}
+
+/** Closed routed turns plus one open turn: enough priced history for one balanced reduction. */
+function conversation(): Session {
+  const text = 'fixture '.repeat(40).trim()
+  const session = Session.create(SessionId('loader-volatile-threshold'))
+  for (let turn = 1; turn <= 4; turn += 1) {
+    session.append('turn/start', { turn })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: `${text} user ${turn}` }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    session.append('step/start', { turn, step: 1 })
+    if (turn === 1) {
+      session.append('request/header', {
+        header: { config: { provider: 'loader', model: 'model' } },
+        reason: 'initial',
+      })
+    }
+    session.append('assistant/message', {
+      stream: [],
+      turn,
+      step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: `${text} assistant ${turn}` }],
+        source: { kind: 'model', ...{ provider: 'loader', model: 'model' } },
+      }),
+    }, { surfaceOp: 'append' })
+    session.append('step/end', { turn, step: 1 })
+    session.append('turn/end', { turn, reason: { kind: 'completed' } })
+  }
+  session.append('turn/start', { turn: 5 })
+  return session
+}
+
+const agent = (session: Session): Agent => ({ session, options: {} }) as Agent
+
+/** The ordinary fields stay identical to the loaded YAML so a threshold edit stays volatile-only. */
+const thresholdConfig = (thresholdTokens: number) => ({
+  auto: false,
+  headroomTokens: 0,
+  maxTokens: 8192,
+  thresholdRatio: 1,
+  retainTokens: 100,
+  thresholdTokens,
+})
 
 let root: string | undefined
 let context: Context | undefined
@@ -23,7 +99,10 @@ afterEach(async () => {
   root = undefined
 })
 
-async function loadYaml(lines: readonly string[]): Promise<Context> {
+async function loadYaml(
+  lines: readonly string[],
+  overrides: Readonly<Record<string, unknown>> = {},
+): Promise<Context> {
   root = await mkdtemp(join(tmpdir(), 'dsh-token-meter-loader-'))
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [...lines, ''].join('\n'))
@@ -39,6 +118,7 @@ async function loadYaml(lines: readonly string[]): Promise<Context> {
     ['@deepseek-ai/dsh-token-meter', TokenMeter],
     ['@deepseek-ai/dsh-compaction-tool-result-pruner', ToolResultPruner],
     ['@deepseek-ai/dsh-compaction-basic', BasicCompactionEngine],
+    ...Object.entries(overrides),
   ])
   context.loader.internal = {
     version: 'v2',
@@ -95,6 +175,52 @@ describe('real Loader composition', () => {
     })
   })
 
+  it('commits a saved absolute threshold into the running engine', async () => {
+    const mounts = StubCompactionEngine.mounts
+    const loaded = await loadYaml([
+      "- name: '@deepseek-ai/dsh-llm'",
+      "- name: '@deepseek-ai/dsh-session'",
+      "- name: '@deepseek-ai/dsh-session-projection'",
+      "- name: '@deepseek-ai/dsh-token-meter'",
+      "- name: '@deepseek-ai/dsh-compaction-basic'",
+      '  config:',
+      '    auto: false',
+      '    headroomTokens: 0',
+      '    maxTokens: 8192',
+      '    thresholdRatio: 1',
+      '    retainTokens: 100',
+    ], { '@deepseek-ai/dsh-compaction-basic': StubCompactionEngine })
+    const entry = [...loaded.loader.entries()]
+      .find(candidate => candidate.options.name === '@deepseek-ai/dsh-compaction-basic')!
+    const engine = loaded.get('compaction') as StubCompactionEngine
+    vi.spyOn(loaded.llm, 'resolveModelInfo').mockResolvedValue({
+      provider: 'loader',
+      id: 'model',
+      name: 'model',
+      context: { contextWindow: 8192 },
+    })
+    const session = conversation()
+    const measured = loaded.tokenMeter.measure(session).totalTokens
+    expect(measured).toBeLessThan(8192)
+    const decide = (): Promise<unknown> => engine.compactIfNeeded(agent(session), 'pressure', SIGNAL)
+
+    // The unconfigured ceiling leaves the capacity terms in charge.
+    await expect(decide()).resolves.toBeNull()
+    expect(StubCompactionEngine.mounts).toBe(mounts + 1)
+
+    await entry.update({ config: thresholdConfig(measured + 100) })
+    expect(StubCompactionEngine.mounts).toBe(mounts + 1)
+    expect(loaded.get('compaction')).toBeInstanceOf(StubCompactionEngine)
+    expect(engine.volatileUpdates).toEqual([[['thresholdTokens']]])
+    await expect(decide()).resolves.toBeNull()
+
+    // A ceiling below the measured pressure triggers on the same mounted engine.
+    await entry.update({ config: thresholdConfig(measured - 100) })
+    expect(StubCompactionEngine.mounts).toBe(mounts + 1)
+    expect(engine.volatileUpdates).toEqual([[['thresholdTokens']], [['thresholdTokens']]])
+    await expect(decide()).resolves.not.toBeNull()
+  })
+
   it('rejects stale token-meter config after Schemastery normalization', async () => {
     context = new Context()
     await context.plugin(SessionProjectionRegistry)
@@ -112,6 +238,18 @@ describe('real Loader composition', () => {
     await expect(context.plugin(BasicCompactionEngine, {
       models: { legacy: { thresholdRatio: 0.5 } },
     } as never)).rejects.toThrow(/BasicCompactionConfig: unknown key "models"/)
+  })
+
+  it('rejects an absolute threshold outside the positive safe-integer range', async () => {
+    context = new Context()
+    await context.plugin(LlmRuntime)
+    await context.plugin(SessionStore)
+    await context.plugin(SessionProjectionRegistry)
+    await context.plugin(TokenMeter)
+    for (const thresholdTokens of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      await expect(context.plugin(BasicCompactionEngine, { thresholdTokens }))
+        .rejects.toThrow(/thresholdTokens/)
+    }
   })
 
   it('rejects a capacity-independent merged ratio conflict during plugin load', async () => {
