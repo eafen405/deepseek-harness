@@ -4,6 +4,7 @@
  * @module @deepseek-ai/dsh-compaction-basic/types
  */
 
+import type { Volatile } from '@deepseek-ai/cordis'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 
 /** Policy fields shared by the default policy and exact model overrides. */
@@ -38,10 +39,29 @@ export interface ModelCompactPolicyConfig extends CompactionPolicyConfig {
 
 /** Basic compaction configuration with an optional exact-target policy table. */
 export interface BasicCompactionConfig extends CompactionPolicyConfig {
+  /**
+   * Deployment-wide absolute pressure ceiling in tokens, applied to every
+   * route. The trigger becomes the smallest of this value, the window fraction,
+   * and the capacity left after the routed output reservation plus
+   * `headroomTokens`; unset leaves the capacity terms alone. Positive integer
+   * that must stay above the resolved retention budget. A saved change reaches
+   * later pressure decisions without remounting the plugin.
+   */
+  thresholdTokens?: number
   /** Exact provider/model overrides; duplicate targets fail plugin load. */
   modelPolicies?: ModelCompactPolicyConfig[]
   /** Enable automatic step-boundary pressure and overflow-recovery listeners. Defaults to `true`. */
   auto?: boolean
+}
+
+/**
+ * Configuration as the plugin receives it after Loader normalization, where
+ * `thresholdTokens` is a stable reference rather than a snapshot. The engine
+ * reads that reference once per pressure decision.
+ */
+export interface BasicCompactionRuntimeConfig extends Omit<BasicCompactionConfig, 'thresholdTokens'> {
+  /** Live absolute pressure ceiling; `get()` returns `undefined` while unset. */
+  thresholdTokens?: Volatile<number | undefined>
 }
 
 /** Exactly one validated retention form. */

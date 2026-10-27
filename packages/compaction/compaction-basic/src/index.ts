@@ -5,6 +5,7 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
+import type { Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { CompactionEngine, ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
@@ -31,12 +32,14 @@ import { summarizeWithLlm } from './summarizer.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
 import type {
   BasicCompactionConfig,
+  BasicCompactionRuntimeConfig,
   ModelCompactPolicyConfig,
   ResolvedConfig,
 } from './types.ts'
 
 export type {
   BasicCompactionConfig,
+  BasicCompactionRuntimeConfig,
   CompactionPolicyConfig,
   ModelCompactPolicyConfig,
   ResolvedCompactSpec,
@@ -113,7 +116,8 @@ const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
 export class BasicCompactionEngine extends CompactionEngine {
   static inject = ['llm', 'tokenMeter', 'sessions']
 
-  static Config: z<BasicCompactionConfig> = z.object({
+  static Config: z<BasicCompactionConfig, BasicCompactionRuntimeConfig> = z.object({
+    thresholdTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).volatile(),
     thresholdRatio: thresholdRatioSchema,
     headroomTokens: headroomTokensSchema,
     retainRatio: retainRatioSchema,
@@ -130,13 +134,17 @@ export class BasicCompactionEngine extends CompactionEngine {
   /** Resolved and validated compaction configuration. */
   readonly config: ResolvedConfig
 
+  /** Live absolute pressure ceiling, read for each pressure decision. */
+  private readonly thresholdTokens: Volatile<number | undefined> | undefined
+
   private readonly warnedPressureConfigTargets = new Set<string>()
   private readonly overflowRetries = new WeakMap<Agent, number>()
   private readonly overflowAgents = new WeakMap<Session, Agent>()
 
-  constructor(ctx: Context, config: BasicCompactionConfig = {}) {
+  constructor(ctx: Context, config: BasicCompactionRuntimeConfig = {}) {
     super(ctx)
     this.config = resolveConfig(config)
+    this.thresholdTokens = config.thresholdTokens
     if (this.config.auto) this._registerAutomaticCompaction()
   }
 
@@ -315,6 +323,9 @@ export class BasicCompactionEngine extends CompactionEngine {
       policy,
       info.context.contextWindow,
       reservedCompletionTokens(agent, info.defaultMaxTokens),
+      // One read per decision: a threshold saved after mount applies to the
+      // next step, and the value is never reused across decisions.
+      this.thresholdTokens?.get(),
     )
     if (measurement.totalTokens < spec.thresholdTokens) return null
 

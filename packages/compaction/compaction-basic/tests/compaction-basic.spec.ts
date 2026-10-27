@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
-import type { BasicCompactionConfig } from '@deepseek-ai/dsh-compaction-basic'
+import type { BasicCompactionRuntimeConfig } from '@deepseek-ai/dsh-compaction-basic'
 import { selectCompactableRange } from '@deepseek-ai/dsh-compaction-basic/src/region.ts'
 import { frameSummary } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
 import type { SummarizationInput, SummaryResult } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
@@ -11,6 +11,7 @@ import {
   resolveCompactSpec,
   resolveConfig,
   resolveTargetPolicy,
+  TargetPressureConfigError,
 } from '@deepseek-ai/dsh-compaction-basic/src/config.ts'
 import type { CompactionResult } from '@deepseek-ai/dsh-compaction'
 import LlmRuntime, { createUserMessage, ToolCallId, CONTEXT_WINDOW_EXCEEDED_CODE, createSystemMessage, createToolResultMessage, LlmAdapter , createMessage } from '@deepseek-ai/dsh-llm'
@@ -291,7 +292,7 @@ class TestCompactionEngine extends BasicCompactionEngine {
 }
 
 function service(
-  config: BasicCompactionConfig = { auto: false },
+  config: BasicCompactionRuntimeConfig = { auto: false },
   ctx = createContext(),
 ): TestCompactionEngine {
   return new TestCompactionEngine(ctx, { headroomTokens: 0, maxTokens: 8192, ...config })
@@ -443,6 +444,48 @@ describe('compact configuration and defaults', () => {
     })
   })
 
+  it('caps the trigger by an explicit absolute threshold', () => {
+    const policy = resolveTargetPolicy(resolveConfig({
+      headroomTokens: 0,
+      maxTokens: 8192,
+    }), { provider: MODEL, model: MODEL })
+
+    // A ceiling above the capacity terms changes nothing.
+    expect(resolveCompactSpec(policy, 1_000_000, 0, 900_000).thresholdTokens).toBe(800_000)
+    // A ceiling below them lowers the trigger, including below the window fraction.
+    expect(resolveCompactSpec(policy, 1_000_000, 0, 500_000).thresholdTokens).toBe(500_000)
+    expect(resolveCompactSpec(policy, 1_000, 0, 700).thresholdTokens).toBe(700)
+    // An unconfigured ceiling leaves the two-term result unchanged.
+    expect(resolveCompactSpec(policy, 1_000, 0).thresholdTokens).toBe(800)
+  })
+
+  it('rejects an absolute threshold at or below the retained budget', () => {
+    const policy = resolveTargetPolicy(resolveConfig({ headroomTokens: 0, maxTokens: 8192 }), {
+      provider: MODEL,
+      model: MODEL,
+    })
+
+    expect(() => resolveCompactSpec(policy, 1_000_000, 0, 100_000))
+      .toThrow(TargetPressureConfigError)
+    expect(() => resolveCompactSpec(policy, 1_000_000, 0, 100_000))
+      .toThrow(/retainTokens \(160000\) must be less than threshold tokens 100000/)
+    expect(resolveCompactSpec(policy, 1_000_000, 0, 160_001).thresholdTokens).toBe(160_001)
+  })
+
+  it('rejects an absolute threshold that is not a positive integer', () => {
+    const policy = resolveTargetPolicy(resolveConfig({ headroomTokens: 0, maxTokens: 8192 }), {
+      provider: MODEL,
+      model: MODEL,
+    })
+
+    expect(() => resolveCompactSpec(policy, 1_000_000, 0, 0))
+      .toThrow(/thresholdTokens \(0\) must be a positive integer/)
+    expect(() => resolveCompactSpec(policy, 1_000_000, 0, 1.5))
+      .toThrow(/thresholdTokens \(1.5\) must be a positive integer/)
+    expect(() => resolveCompactSpec(policy, 1_000_000, 0, -1))
+      .toThrow(/positive integer/)
+  })
+
   it.each([500, 501])('rejects headroom %i that exhausts the remaining capacity', (headroomTokens) => {
     const policy = resolveTargetPolicy(resolveConfig({ headroomTokens }), { provider: MODEL, model: MODEL })
     expect(() => resolveCompactSpec(policy, 1_000, 500))
@@ -556,10 +599,14 @@ describe('compact configuration and defaults', () => {
       [{ modelPolicies: [{ provider: MODEL, model: MODEL }, { provider: MODEL, model: MODEL }] }, /duplicate model policy/],
       [{ models: { [MODEL]: { retainTokens: 10 } } }, /BasicCompactionConfig: unknown key "models"/],
       [{ thresholdRato: 0.5 }, /BasicCompactionConfig: unknown key "thresholdRato"/],
+      [
+        { modelPolicies: [{ provider: MODEL, model: MODEL, thresholdTokens: 500 }] },
+        /modelPolicies\[0\]: unknown key "thresholdTokens"/,
+      ],
     ] as Array<[unknown, RegExp]>
 
     for (const [config, pattern] of bad) {
-      expect(() => resolveConfig(config as BasicCompactionConfig)).toThrow(pattern)
+      expect(() => resolveConfig(config as BasicCompactionRuntimeConfig)).toThrow(pattern)
     }
 
     const invalidPressure = resolveTargetPolicy(resolveConfig({
@@ -576,7 +623,7 @@ describe('compact configuration and defaults', () => {
 })
 
 describe('pressure measurement and retention', () => {
-  const compactConfig: BasicCompactionConfig = {
+  const compactConfig: BasicCompactionRuntimeConfig = {
     auto: false,
     thresholdRatio: 0.5,
     retainTokens: 180,
@@ -743,6 +790,30 @@ describe('pressure measurement and retention', () => {
     await expect(compactIfNeeded(compact, session, 'context-overflow')).resolves.toBeNull()
     expect(session.surface.replaceGeneration).toBe(generation)
     expect(session.snapshotEvents().some(event => event.type === 'compaction/start')).toBe(false)
+  })
+
+  it('reads the live absolute threshold once per pressure decision', async () => {
+    const ctx = createContext()
+    const session = conversation(4)
+    const measured = ctx.tokenMeter.measure(session).totalTokens
+    let ceiling = measured + 100
+    const get = vi.fn(() => ceiling)
+    const compact = service({
+      auto: false,
+      thresholdRatio: 1,
+      retainTokens: 10,
+      thresholdTokens: { get },
+    }, ctx)
+
+    // Construction keeps the reference; no value is captured up front.
+    expect(get).not.toHaveBeenCalled()
+    expect(await compactIfNeeded(compact, session)).toBeNull()
+    expect(get).toHaveBeenCalledOnce()
+
+    // The same mounted engine honors a value saved later.
+    ceiling = measured - 100
+    expect(await compactIfNeeded(compact, session)).not.toBeNull()
+    expect(get).toHaveBeenCalledTimes(2)
   })
 
   it('does nothing below threshold and compacts a priced head above threshold', async () => {
@@ -1371,7 +1442,7 @@ async function summarizerHarness(
   blocks: readonly ContentBlock[],
   finish?: (StreamChunk & { type: 'finish' })['reason'],
   model = MODEL,
-  config: BasicCompactionConfig = { auto: false },
+  config: BasicCompactionRuntimeConfig = { auto: false },
 ): Promise<{ ctx: Context; adapter: ScriptedAdapter; compact: ExposedCompactionEngine }> {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
