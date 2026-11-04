@@ -97,6 +97,8 @@ export interface AssembledSection {
   text: string
   /** Whether to interpolate prompt variables. Defaults to true; false preserves literal text. */
   interpolate?: boolean
+  /** Whether this section was registered as the complete system prompt. */
+  readonly complete?: true
 }
 
 /** One resolved dynamic context contribution. */
@@ -661,6 +663,7 @@ export class SystemPrompt extends Service {
           name: section.name,
           text: typeof section.text === 'function' ? section.text(context) : section.text,
           ...section.interpolate !== undefined ? { interpolate: section.interpolate } : {},
+          ...section.complete === true ? { complete: true as const } : {},
         }
         if (section.complete === true) completeSection = { ...assembled }
         return assembled
