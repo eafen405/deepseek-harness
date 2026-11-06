@@ -105,10 +105,88 @@ function systemHead(session: Session, headSeq: SessionSeq): SessionEvent<'system
 }
 
 /**
+ * Whether one surface node is a direct human prompt rather than injected
+ * context, a delivered report or a checkpoint.
+ * @param session - session supplying the log behind the surface.
+ * @param seq - surface position to classify.
+ * @returns true when the node is a user-authored `user/message`.
+ */
+function isHumanPrompt(session: Session, seq: SessionSeq): boolean {
+  // Existing Session history read; migration deferred.
+  // oxlint-disable-next-line typescript/no-deprecated
+  const event = session.eventAt(seq)
+  return event?.type === 'user/message' && event.data.source.kind === 'user'
+}
+
+/**
+ * The log position of the open turn's `turn/start`, if a turn is open.
+ *
+ * Only a turn that has started and not ended owns a question still being
+ * answered. Scanned backwards from the newest event because the answer is
+ * almost always the first thing found.
+ * @param session - session whose log is read.
+ * @returns the open turn's start seq, or undefined when the tail turn closed.
+ */
+function openTurnStartSeq(session: Session): SessionSeq | undefined {
+  for (let seq = session.seq - 1; seq >= 0; seq -= 1) {
+    // Existing Session history read; migration deferred.
+    // oxlint-disable-next-line typescript/no-non-null-assertion, typescript/no-deprecated
+    const event = session.eventAt(SessionSeq(seq))!
+    if (event.type === 'turn/end') return undefined
+    if (event.type === 'turn/start') return event.seq
+  }
+  return undefined
+}
+
+/**
+ * The surface position of the open turn's direct human prompt while the turn
+ * has not yet answered it.
+ *
+ * "Unanswered" means no assistant message follows the prompt in that turn: the
+ * request carrying the prompt is still the request being served. A prompt the
+ * turn has already answered is ordinary compactable history — its text reached
+ * the summarizer, and the model has already begun working from it.
+ * @param session - session supplying the log behind the surface.
+ * @param surfaceNodes - current surface positions, head first.
+ * @param firstIdx - first compactable index, after a system head.
+ * @param openTurn - the open turn's start seq.
+ * @returns the prompt index to protect, or -1 when none needs protection.
+ */
+function unansweredPromptIdx(
+  session: Session,
+  surfaceNodes: readonly SessionSeq[],
+  firstIdx: number,
+  openTurn: SessionSeq,
+): number {
+  let promptIdx = -1
+  for (let index = surfaceNodes.length - 1; index >= firstIdx; index -= 1) {
+    const seq = surfaceNodes[index]
+    if (seq === undefined || seq < openTurn) break
+    // Existing Session history read; migration deferred.
+    // oxlint-disable-next-line typescript/no-deprecated
+    const event = session.eventAt(seq)
+    if (event?.type === 'assistant/message') return -1
+    if (promptIdx < 0 && isHumanPrompt(session, seq)) promptIdx = index
+  }
+  return promptIdx
+}
+
+/**
  * Resolve the next range starting at the first non-system surface node while
  * retaining a priced recent tail and never splitting an assistant
  * tool-call/result pair. A `system/message` at surface node 0 is never inside
  * the range; without one the range starts at node 0.
+ *
+ * The range also ends before the open turn's prompt while that turn has not
+ * answered it. The prompt is then the question the current request asks, and
+ * the nodes after it are that request's inputs — injected runtime context,
+ * agent instructions. With a zero retained budget the tail is measured from
+ * whatever node happens to be last, so a runtime-context snapshot committed
+ * after the prompt would otherwise become the only retained node and push the
+ * prompt itself into the compacted span: the retry rebuilt from the checkpoint
+ * then answered a question it could no longer read. A closed turn's prompt,
+ * and a prompt the turn has already answered, stay ordinary compactable
+ * history.
  * @param session - session supplying authoritative current surface positions.
  * @param measurement - unified pressure and surface measurement from the conversation meter.
  * @param retainTokens - minimum recent tail budget retained verbatim.
@@ -137,6 +215,17 @@ export function selectCompactableRange(
     accumulated += pricedNodes[index]!.tokens
     keepFromIdx = index
     if (accumulated >= retainTokens) break
+  }
+
+  // The open turn's unanswered prompt is the question this very request asks,
+  // so the range ends before it however small the retained budget is. Injected
+  // runtime context committed after the prompt stays verbatim with it: it is
+  // that request's input, and replacing the prompt mid-request would answer a
+  // question the model can no longer read.
+  const openTurn = openTurnStartSeq(session)
+  if (openTurn !== undefined) {
+    const promptIdx = unansweredPromptIdx(session, surfaceNodes, firstIdx, openTurn)
+    if (promptIdx >= 0) keepFromIdx = Math.min(keepFromIdx, promptIdx)
   }
   if (keepFromIdx <= firstIdx) return null
 
