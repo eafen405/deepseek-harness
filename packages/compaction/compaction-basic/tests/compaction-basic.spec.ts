@@ -2007,6 +2007,80 @@ describe('automatic listener and loader composition', () => {
     expect(session.surface.replaceGeneration).toBe(1)
   })
 
+  it('keeps the open turn\'s prompt when an injected snapshot follows it and nothing is retained', async () => {
+    const ctx = createContext(10_000)
+    void new TestCompactionEngine(ctx, {
+      headroomTokens: 0,
+      maxTokens: 8192,
+      thresholdRatio: 1,
+      retainTokens: 900,
+    })
+    const session = conversation(3)
+    const prompt = session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'CURRENT-QUESTION '.repeat(40) }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    // Injected context is committed after the prompt, so with a zero retained
+    // budget it is the last node and the tail is measured from it.
+    const snapshot = session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'Current runtime context. CHANGED-SNAPSHOT' }],
+      source: { kind: 'test', form: 'snapshot', sections: [{ name: 'test', text: 'CHANGED-SNAPSHOT' }] },
+    }), { surfaceOp: 'append' })
+
+    const range = selectCompactableRange(session, ctx.tokenMeter.measure(session), 0)
+    expect(range).not.toBeNull()
+    expect(range!.end).toBeLessThan(prompt.seq)
+    expect(range!.end).toBeLessThan(snapshot.seq)
+
+    // The overflow recovery rebuilds the retry from this selection, so the
+    // question must still be in the derived surface afterwards.
+    expect(await recover(ctx, agent(session, MODEL), overflow())).toBe(true)
+    const derived = session.deriveMessages()
+    expect(derived.some(message => message.role === 'user'
+      && message.content.some(block => block.type === 'text' && block.text.includes('CURRENT-QUESTION')))).toBe(true)
+  })
+
+  it('still compacts a closed turn\'s prompt in an open session', async () => {
+    const ctx = createContext(10_000)
+    void new TestCompactionEngine(ctx, { headroomTokens: 0, maxTokens: 8192, thresholdRatio: 1, retainTokens: 900 })
+    const session = conversation(3)
+    const closedPrompt = session.surface.nodes[4]!
+    const range = selectCompactableRange(session, ctx.tokenMeter.measure(session), 0)
+    expect(range).not.toBeNull()
+    // Only an unanswered prompt is protected: the last closed turn's prompt is
+    // still inside the span, which is what a below-pressure or manual
+    // compaction of real history needs.
+    expect(range!.end).toBeGreaterThanOrEqual(closedPrompt)
+  })
+
+  it('compacts normally once the open turn has answered its prompt', async () => {
+    const ctx = createContext(10_000)
+    void new TestCompactionEngine(ctx, { headroomTokens: 0, maxTokens: 8192, thresholdRatio: 1, retainTokens: 900 })
+    const session = conversation(3)
+    const prompt = session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'ANSWERED-QUESTION '.repeat(40) }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    session.append('step/start', { turn: 4, step: 1 })
+    // Mid-turn pressure: the assistant already answered the prompt and the loop
+    // is preparing the next step, so the prompt is delivered history.
+    session.append('assistant/message', {
+      stream: [],
+      turn: 4,
+      step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'working '.repeat(40) }],
+        source: { kind: 'model', ...{ provider: MODEL, model: MODEL } },
+      }),
+    }, { surfaceOp: 'append' })
+
+    const range = selectCompactableRange(session, ctx.tokenMeter.measure(session), 0)
+    expect(range).not.toBeNull()
+    // The span is inclusive, so ending on the prompt includes it.
+    expect(range!.end).toBeGreaterThanOrEqual(prompt.seq)
+  })
+
   it('preserves the newest whole tool-call/result pair during forced overflow compaction', async () => {
     const ctx = createContext()
     void new TestCompactionEngine(ctx, {
