@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { SessionFormatError, isSessionFormatJsonObject, sessionFormatCount } from '@deepseek-ai/dsh-session-format'
 import type { SessionFormatArtifact, SessionFormatEvent, SessionFormatJsonObject, SessionFormatJsonValue } from '@deepseek-ai/dsh-session-format'
 
-const SURFACE_TYPES = new Set(['system/message', 'user/message', 'developer/message', 'assistant/message', 'tool/result'])
+const SURFACE_TYPES = new Set(['system/message', 'user/message', 'developer/message', 'assistant/message', 'delivery/message', 'tool/result'])
 const STEP_EVENT_TYPES = new Set(['system/message', 'developer/message', 'assistant/attempt'])
 const RELATIONSHIP_TYPES = new Set([
   ...SURFACE_TYPES, ...STEP_EVENT_TYPES, 'turn/start', 'turn/end', 'step/start', 'step/end',
@@ -376,6 +376,7 @@ function titleSources(
 
 /**
  * Validate native V4 lifecycle and ownership facts without rewriting any event.
+ * Known delivery messages occupy surface positions in compaction and replacement spans.
  * @param artifact - artifact whose V4 envelopes and messages have been admitted.
  * @param knownEventTypes - installed event types whose payloads this reader interprets.
  */

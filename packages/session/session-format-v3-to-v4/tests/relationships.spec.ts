@@ -32,7 +32,7 @@ function reopen(rows: readonly Row[], inherited = 0, seeded = false) {
   const artifact = restore.finish()
   expect(artifact.inheritedEventCount).toBe(inherited)
   const session = Session.fromRestore(SessionId(artifact.header.id), artifact.events as SessionEvent[], artifact.header as unknown as SessionHeader, SessionLogOffset(inherited), 'detached')
-  return { artifact, messages: session.deriveMessages() }
+  return { artifact, session, messages: session.deriveMessages() }
 }
 
 const compact = (): Row[] => [
@@ -188,6 +188,77 @@ describe('mandatory V4 dependent event restoration', () => {
 
 describe('V4 protected system surface and malformed relationship inputs', () => {
   const system = (): Row => ({ ...row('system/message', { ...step, message: { id: 'system', role: 'system', source: { kind: 'system-prompt' }, content: [{ type: 'text', text: 'system' }] } }), surfaceOp: 'append' })
+  const delivery = (id: string): Row => ({
+    ...row('delivery/message', {
+      deliveryId: id, origin: { sessionId: 'sender' },
+      message: { id, role: 'assistant', source: { kind: 'delivered-message', deliveryId: id, senderSessionId: 'sender' }, content: [{ type: 'text', text: id }] },
+    }),
+    surfaceOp: 'append',
+  })
+  const deliveryClears = (): Row[] => [
+    ...begin(), system(), input(), assistant([{ type: 'text', text: 'response' }]), ...end(), delivery('first-delivery'),
+    row('compaction/prune', { shadowedRange: { start: 3, end: 7 }, shadowedSeqs: [3, 4, 7], shadowedTokenCount: 3 }),
+    { ...input('clear'), data: { ...user('clear'), id: 'first-clear' }, surfaceOp: { op: 'replace', startSeq: 3, endSeq: 7 }, sourceEventSeqs: [3, 4, 7] },
+    delivery('second-delivery'),
+    row('compaction/prune', { shadowedRange: { start: 9, end: 10 }, shadowedSeqs: [9, 10], shadowedTokenCount: 2 }),
+    { ...input('clear'), data: { ...user('clear'), id: 'second-clear' }, surfaceOp: { op: 'replace', startSeq: 9, endSeq: 10 }, sourceEventSeqs: [9, 10] },
+  ]
+
+  it('restores two delivery and clear replacements after a completed human turn', () => {
+    const rows = deliveryClears()
+    expect(reopen(rows.slice(0, 8)).messages.map(message => message.id)).toEqual(['system', 'input', 'assistant', 'first-delivery'])
+    const first = reopen(rows.slice(0, 10))
+    expect(first.session.surface.nodes).toEqual([2, 9])
+    expect(first.messages.map(message => message.id)).toEqual(['system', 'first-clear'])
+    const second = reopen(rows)
+    expect(second.session.surface.nodes).toEqual([2, 12])
+    expect(second.messages.map(message => message.id)).toEqual(['system', 'second-clear'])
+    expect(second.messages.map(message => message.content)).toEqual([
+      [{ type: 'text', text: 'system' }], [{ type: 'text', text: 'input' }],
+    ])
+  })
+
+  it.each([
+    ['only node', [], { start: 7, end: 7 }, [7]],
+    ['first node', [input()], { start: 7, end: 8 }, [7, 8]],
+  ] satisfies Array<[string, Row[], { start: number; end: number }, number[]]>)('restores a prune and replacement with delivery as the %s', (_name, tail, range, seqs) => {
+    const rows = [
+      ...deliveryClears().slice(0, 8), ...tail,
+      row('compaction/prune', { shadowedRange: range, shadowedSeqs: seqs, shadowedTokenCount: seqs.length }),
+      { ...input('clear'), surfaceOp: { op: 'replace', startSeq: range.start, endSeq: range.end }, sourceEventSeqs: seqs },
+    ]
+    const restored = reopen(rows)
+    expect(restored.session.surface.nodes).toEqual([2, 3, 4, rows.length - 1])
+    expect(restored.messages.map(message => message.role)).toEqual(['system', 'user', 'assistant', 'user'])
+  })
+
+  it.each([
+    ['omitted delivery', { start: 3, end: 8 }, [3, 4, 8]],
+    ['missing endpoint', { start: 5, end: 8 }, [7, 8]],
+    ['reversed endpoints', { start: 8, end: 3 }, [8, 7, 4, 3]],
+    ['forward endpoint', { start: 3, end: 10 }, [3, 4, 7, 8]],
+    ['protected system head', { start: 2, end: 8 }, [2, 3, 4, 7, 8]],
+  ] satisfies Array<[string, { start: number; end: number }, number[]]>)('rejects a delivery prune with %s', (_name, range, seqs) => {
+    const rows = [...deliveryClears().slice(0, 8), input(),
+      row('compaction/prune', { shadowedRange: range, shadowedSeqs: seqs, shadowedTokenCount: 4 })]
+    expect(() => reopen(rows)).toThrow(/current surface span|earlier event|protected system head/)
+  })
+
+  it('rejects delivery replacements with missing sources or invalid endpoints', () => {
+    const prefix = [...deliveryClears().slice(0, 8), input()]
+    for (const replacement of [
+      { ...input('clear'), surfaceOp: { op: 'replace', startSeq: 3, endSeq: 8 }, sourceEventSeqs: [3, 4, 8] },
+      { ...input('clear'), surfaceOp: { op: 'replace', startSeq: 3, endSeq: 8 }, sourceEventSeqs: [3, 4, 7, 8, 9] },
+      { ...input('clear'), surfaceOp: { op: 'replace', startSeq: 5, endSeq: 8 }, sourceEventSeqs: [3, 4, 7, 8] },
+      { ...input('clear'), surfaceOp: { op: 'replace', startSeq: 8, endSeq: 3 }, sourceEventSeqs: [3, 4, 7, 8] },
+    ]) expect(() => reopen([...prefix, replacement])).toThrow(/sourceEventSeqs|replacement range/)
+
+    const rows = deliveryClears().slice(0, 11)
+    expect(() => reopen([...rows, row('compaction/prune', {
+      shadowedRange: { start: 7, end: 10 }, shadowedSeqs: [7, 10], shadowedTokenCount: 2,
+    })])).toThrow(/exact current surface span/)
+  })
+
   it('keeps the first system head protected across exact replacements', () => {
     const replacement = { ...system(), surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 }, sourceEventSeqs: [2] }
     expect(() => reopen([...begin(), system(), input(), replacement, system(), ...end()])).not.toThrow()
