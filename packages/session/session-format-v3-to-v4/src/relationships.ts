@@ -123,9 +123,6 @@ class Relationships {
 
   foldSurface(event: SessionFormatEvent): void {
     if (!SURFACE_TYPES.has(event.type)) return
-    if (event.type === 'system/message' && this.surface.length > 0 && this.protectedHead === undefined) {
-      throw new SessionFormatError('system/message requires a protected first surface head')
-    }
     if (event['surfaceOp'] === 'append') {
       if (event.type === 'system/message' && this.surface.length === 0) this.protectedHead = event.seq
       this.surface.push(event.seq)
@@ -140,8 +137,8 @@ class Relationships {
     if (removed.some(seq => !sources.includes(seq))) throw new SessionFormatError('replacement sourceEventSeqs omit a shadowed surface node')
     if (this.protectedHead !== undefined && removed.includes(this.protectedHead)) {
       if (event.type !== 'system/message' || removed.length !== 1) throw new SessionFormatError('surface replacement cannot shadow the protected system head')
-      this.protectedHead = event.seq
     }
+    if (first === 0 && event.type === 'system/message') this.protectedHead = event.seq
     this.surface.splice(first, removed.length, event.seq)
   }
 
@@ -377,6 +374,7 @@ function titleSources(
 /**
  * Validate native V4 lifecycle and ownership facts without rewriting any event.
  * Known delivery messages occupy surface positions in compaction and replacement spans.
+ * Nonleading system messages remain replaceable surface nodes.
  * @param artifact - artifact whose V4 envelopes and messages have been admitted.
  * @param knownEventTypes - installed event types whose payloads this reader interprets.
  */

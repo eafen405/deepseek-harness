@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { Session, SessionId, SessionLogOffset, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
-import type { SessionFormatEvent } from '@deepseek-ai/dsh-session-format'
+import type { SessionFormatArtifact, SessionFormatEvent } from '@deepseek-ai/dsh-session-format'
+import { restoreReleasedV4Artifact } from '../src/index.ts'
 
 type Row = { type: string; data: Record<string, unknown>; surfaceOp?: unknown; sourceEventSeqs?: number[]; ignorable?: true }
 const row = (type: string, data: Record<string, unknown>): Row => ({ type, data })
@@ -259,14 +260,55 @@ describe('V4 protected system surface and malformed relationship inputs', () => 
     })])).toThrow(/exact current surface span/)
   })
 
+  it('restores a nonleading system node and a cited replacement of an ordinary user head', () => {
+    const prefix = [...begin(), input()]
+    const appended = reopen([...prefix, system(), ...end()])
+    expect(appended.session.surface.nodes).toEqual([2, 3])
+    expect(appended.messages.map(message => message.role)).toEqual(['user', 'system'])
+    const replaced = reopen([...prefix, {
+      ...system(), surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 }, sourceEventSeqs: [2],
+    }, ...end()])
+    expect(replaced.session.surface.nodes).toEqual([3])
+    expect(replaced.messages.map(message => message.role)).toEqual(['system'])
+
+    const shadowedTail = reopen([...prefix, system(), {
+      ...input('clear'), surfaceOp: { op: 'replace', startSeq: 3, endSeq: 3 }, sourceEventSeqs: [3],
+    }, ...end()])
+    expect(shadowedTail.session.surface.nodes).toEqual([2, 4])
+    expect(shadowedTail.messages.map(message => message.role)).toEqual(['user', 'user'])
+  })
+
+  it.each([
+    ['unopened step', [row('turn/start', { turn: 1 }), input(), system()]],
+    ['mismatched turn', [...begin(), input(), { ...system(), data: { ...system().data, turn: 2 } }]],
+    ['mismatched step', [...begin(), input(), { ...system(), data: { ...system().data, step: 2 } }]],
+    ['omitted replacement source', [...begin(), input(), system(), {
+      ...input('clear'), surfaceOp: { op: 'replace', startSeq: 3, endSeq: 3 }, sourceEventSeqs: [2],
+    }]],
+  ] satisfies Array<[string, Row[]]>)('rejects a late system history with %s', (_name, rows) => {
+    expect(() => reopen(rows)).toThrow(/open turn and step|sourceEventSeqs/)
+  })
+
+  it('protects a system message that replaced an ordinary user head during native restoration', () => {
+    const rows = [...begin(), input(), {
+      ...system(), surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 }, sourceEventSeqs: [2],
+    }, {
+      ...input('clear'), surfaceOp: { op: 'replace', startSeq: 3, endSeq: 3 }, sourceEventSeqs: [3],
+    }, ...end()]
+    const artifact: SessionFormatArtifact = {
+      header: { version: 4, id: 'promoted-system-head', createdAt: 1, delegationDepth: 0, isSeeded: false },
+      events: rows.map((candidate, seq): SessionFormatEvent => JSON.parse(JSON.stringify({ ...candidate, seq, time: seq + 1 }))),
+      inheritedEventCount: 0,
+    }
+    expect(() => restoreReleasedV4Artifact(artifact, new Set(rows.map(candidate => candidate.type)))).toThrow(/protected system head/)
+  })
+
   it('keeps the first system head protected across exact replacements', () => {
     const replacement = { ...system(), surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 }, sourceEventSeqs: [2] }
     expect(() => reopen([...begin(), system(), input(), replacement, system(), ...end()])).not.toThrow()
     const prune = row('compaction/prune', { shadowedRange: { start: 3, end: 3 }, shadowedSeqs: [3], shadowedTokenCount: 1 })
     expect(() => reopen([...begin(), system(), input(), prune, ...end()])).not.toThrow()
     for (const rows of [
-      [...begin(), input(), system()],
-      [...begin(), input(), { ...replacement, sourceEventSeqs: [2] }],
       [...begin(), system(), { ...input(), surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 }, sourceEventSeqs: [2] }],
       [...begin(), system(), input(), { ...replacement, surfaceOp: { op: 'replace', startSeq: 2, endSeq: 3 }, sourceEventSeqs: [2, 3] }],
       [...begin(), system(), input(), { ...replacement, surfaceOp: { op: 'replace', startSeq: 0, endSeq: 0 } }],

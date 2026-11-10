@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { installModelSelection, type Agent, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
-import LlmRuntime, { createUserMessage, LlmError, type GenerateOptions } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createAssistantMessage, createUserMessage, LlmError, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { toPiContext } from '@deepseek-ai/dsh-llm-pi-ai/src/context.ts'
-import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { DeliveryId, Session, SessionId, SessionLogOffset, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
@@ -79,6 +80,30 @@ function expectPlain(request: GenerateOptions, prompt: string) {
 }
 
 describe('prepared-route prompt admission', () => {
+  it('cold-restores the first human turn after a delivery arrived before any system prompt', async () => {
+    const h = await harness()
+    h.agent.session.append('delivery/message', {
+      deliveryId: DeliveryId('early-delivery'), origin: { sessionId: SessionId('sender') },
+      message: createAssistantMessage({
+        content: [{ type: 'text', text: 'delivered before the first human turn' }],
+        source: { deliveryId: 'early-delivery', senderSessionId: 'sender' },
+      }),
+    }, { surfaceOp: 'append' })
+    await send(h.agent, 'first human input')
+    expect(h.capable.requests).toHaveLength(1)
+    expect(h.capable.requests[0]?.messages.map(message => message.role)).toEqual(['assistant', 'system', 'user'])
+    const session = h.agent.session
+    const rows = session.snapshotEvents()
+    expect(rows[0]?.type).toBe('delivery/message')
+    const restore = sessionFormatCatalog.createRestore({ type: 'session', ...session.header, delegationDepth: 0 }, { recovery: 'strict', validation: 'current' })
+    for (const event of rows) restore.decodeRow(JSON.parse(JSON.stringify(event)))
+    const artifact = restore.finish()
+    expect(artifact.events).toEqual(rows)
+    const reopened = Session.fromRestore(session.id, artifact.events as SessionEvent[], session.header, SessionLogOffset(0), 'detached')
+    expect(reopened.surface.nodes).toEqual(session.surface.nodes)
+    expect(reopened.deriveMessages()).toEqual(session.deriveMessages())
+  })
+
   describe.each(['addition-only', 'in-history'] as const)('prompt/tool admission with %s updates', (toolUpdate) => {
     it.each(['simultaneous', 'after-prompt-update'] as const)('preserves earlier input and defers additions: %s', async (timing) => {
       const h = await harness()
