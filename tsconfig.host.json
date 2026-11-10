@@ -214,6 +214,7 @@
     "packages/experimental/inspector/scripts/**/*.ts",
     "packages/llm/llm-pi-ai/scripts/**/*.ts",
     "scripts/**/*.ts",
+    "snapshots/sdk/**/*.ts",
     "website/**/*.ts",
     "website/.vitepress/**/*.ts"
   ],

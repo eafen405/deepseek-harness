@@ -966,6 +966,19 @@ describe('stabilizeFixtureMessageIds', () => {
     expect(stabilizeFixtureMessageIds([log(freshId)], [log(oldId)])).toEqual([log(oldId)])
   })
 
+  it('stabilizes delivered message identities without changing delivery relationships', () => {
+    const freshId = '11111111-1111-4111-8111-111111111111'
+    const oldId = '22222222-2222-4222-8222-222222222222'
+    const log = (id: string) => JSON.stringify({ type: 'delivery/message', data: {
+      deliveryId: 'delivery', origin: { sessionId: 'sender' },
+      message: {
+        id, role: 'assistant', source: { kind: 'delivered-message', deliveryId: 'delivery', senderSessionId: 'sender' },
+        content: [{ type: 'text', text: 'delivered text' }],
+      },
+    } }) + '\n'
+    expect(stabilizeFixtureMessageIds([log(freshId)], [log(oldId)])).toEqual([log(oldId)])
+  })
+
   it('rewrites only complete messages carried by surface events or durable inbox splices', () => {
     const ids = {
       freshUser: '11111111-1111-4111-8111-111111111111',

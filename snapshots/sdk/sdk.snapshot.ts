@@ -35,7 +35,6 @@ import {
   restorePinnedToolSchemas,
   scrubModelRequestBulk,
   scrubSessionSnapshot,
-  scrubSystemPrompts,
   sessionFixtureName,
   systemPromptPrecedesRequests,
   sessionFixtureNames,
@@ -63,6 +62,9 @@ import {
 } from '@deepseek-ai/dsh-sdk-client'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { deriveReplayScript, parseSessionLog } from '@deepseek-ai/dsh-llm-replay'
+import type {} from '@deepseek-ai/dsh-compaction'
+import type {} from '@deepseek-ai/dsh-tool-todo'
+import type {} from '../../packages/compaction/compaction-image-offload/src/projection.ts'
 
 const corpusRoot = fileURLToPath(new URL('../', import.meta.url))
 
@@ -96,10 +98,6 @@ const dshSdkChildConfig = fileURLToPath(new URL(
   import.meta.url,
 ))
 
-function dirOf(url: string): string {
-  return fileURLToPath(new URL('.', url))
-}
-
 interface SdkAssertions {
   /** Additional profile patches applied after the shared composition. */
   patches?: readonly string[]
@@ -130,6 +128,10 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
   'minimal-image-compaction': {
     expectedFinalResponse: 'MINIMAL_IMAGE_OK',
     expectedTools: { bash: ['command'], read_image: ['file_path'], working_directory: [] },
+  },
+  'delivery-replacement-resume': {
+    patches: [fileURLToPath(new URL('./delivery-replacement-resume/runtime.cordis.yml', import.meta.url))],
+    expectedFinalResponse: 'TWO',
   },
   'session-title-stability': { waitForProviderTitle: true },
   'dynamic-tool-updates': {
@@ -616,7 +618,8 @@ async function runScenario(scenario: CorpusScenario): Promise<{
   })
   const [parentFixture, ...childFixtures] = replayFixtures
   const actions = turnActions(primaryFixture)
-  const resumeReplayFile = scenario.name === 'session-resume' && !recording
+  const coldResume = scenario.name === 'session-resume' || scenario.name === 'delivery-replacement-resume'
+  const resumeReplayFile = coldResume && !recording
     ? join(patchRoot, 'resume-replay.json') : undefined
   const prepareTurnReplay = async (turn: number): Promise<void> => {
     if (resumeReplayFile === undefined || parentFixture === undefined) return
@@ -694,7 +697,7 @@ async function runScenario(scenario: CorpusScenario): Promise<{
           )
           continue
         }
-        if (scenario.name === 'session-resume' && results.length > 0) {
+        if (coldResume && results.length > 0) {
           subscription.close()
           await harness.close()
           await prepareTurnReplay(action.turn)
@@ -969,7 +972,7 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         } })
         expect(summaries[0]?.data).not.toHaveProperty('sourceCommandId')
         expect(events.filter(event => event.type === 'compaction/end')).toHaveLength(1)
-        expect(events.filter(event => event.type === 'compaction/error')).toHaveLength(0)
+        expect(events.find(event => event.type === 'compaction/end')?.data).not.toHaveProperty('error')
         const offloads = events.filter(event => event.type === 'image/offload')
         expect(offloads).toHaveLength(1)
         const imageSeq = events.find(event => event.type === 'tool/result')?.seq
